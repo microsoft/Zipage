@@ -12,9 +12,16 @@ def global_score_kernel(
     compressed_ptr,
     H_kv: tl.constexpr,
     BLOCK_N: tl.constexpr,
+<<<<<<< HEAD
     MAX_BLOCKS_PER_SEQ: tl.int32,
     BLOCK_SIZE: tl.constexpr,
     decay_factor: tl.float32,
+=======
+    BATCH_SIZE: tl.constexpr,
+    MAX_BLOCKS_PER_SEQ: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+    decay_factor: tl.constexpr,
+>>>>>>> 2aaa790 (init commit)
     stride_sb,
     stride_sh,
     stride_slb,
@@ -93,6 +100,10 @@ def global_score(
         compressed,
         num_kv_heads,
         BLOCK_N,
+<<<<<<< HEAD
+=======
+        batch_size,
+>>>>>>> 2aaa790 (init commit)
         max_num_blocks_per_seq,
         block_size,
         decay_factor,

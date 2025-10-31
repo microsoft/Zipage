@@ -25,6 +25,7 @@ class Config:
     decay_factor: float = 0.6
     similarity_factor: float = 0.4
     use_similarity: bool = False
+<<<<<<< HEAD
     use_attention_sink: bool = False
     sink_len: int = 4
     keep_order: bool = False
@@ -32,6 +33,14 @@ class Config:
     enable_async_compress: bool = False
     enable_hybrid_engine: bool = False
     strict_max_blocks: bool = False
+=======
+    use_attention_sink: bool = True
+    sink_len: int = 4
+    keep_order: bool = True
+    repetition_penalty: float = 1.0
+    enable_async_compress: bool = False
+    enable_hybrid_engine: bool = False
+>>>>>>> 2aaa790 (init commit)
 
     def __post_init__(self):
         assert os.path.isdir(self.model)

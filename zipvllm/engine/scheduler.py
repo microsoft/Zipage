@@ -20,8 +20,11 @@ class Scheduler:
         self.running: deque[Sequence] = deque()
         self.free_seq_ids: deque[int] = deque(range(config.max_num_seqs))
         self.used_seq_ids: set[int] = set()
+<<<<<<< HEAD
         self.enable_hybrid_engine = config.enable_hybrid_engine
         self.strict_max_blocks = config.strict_max_blocks
+=======
+>>>>>>> 2aaa790 (init commit)
 
     def is_finished(self):
         return not self.waiting and not self.running
@@ -35,20 +38,30 @@ class Scheduler:
         seq.seq_id = seq_id
 
     def _deallocate_seq_id(self, seq: Sequence):
+<<<<<<< HEAD
         if seq.seq_id != -1:
             self.used_seq_ids.remove(seq.seq_id)
             self.free_seq_ids.append(seq.seq_id)
+=======
+        self.used_seq_ids.remove(seq.seq_id)
+        self.free_seq_ids.append(seq.seq_id)
+>>>>>>> 2aaa790 (init commit)
 
     def schedule(self) -> tuple[list[Sequence], bool]:
         # prefill
         prefilling_seqs = []
         num_batched_tokens = 0
+<<<<<<< HEAD
         while self.waiting:
+=======
+        while self.waiting and len(self.free_seq_ids) > 0:
+>>>>>>> 2aaa790 (init commit)
             seq = self.waiting[0]
             if num_batched_tokens + len(
                 seq
             ) > self.max_num_batched_tokens or not self.block_manager.can_allocate(seq):
                 break
+<<<<<<< HEAD
             if len(self.free_seq_ids) == 0:
                 if not self.enable_hybrid_engine:
                     break
@@ -59,6 +72,9 @@ class Scheduler:
                     break
             if len(self.free_seq_ids) > 0:
                 self._allocate_seq_id(seq)
+=======
+            self._allocate_seq_id(seq)
+>>>>>>> 2aaa790 (init commit)
             self.block_manager.allocate(seq)
             num_batched_tokens += len(seq)
             seq.status = SequenceStatus.RUNNING
@@ -69,6 +85,7 @@ class Scheduler:
             return prefilling_seqs, True
 
         # decode
+<<<<<<< HEAD
         decoding_and_compressing_seqs = []
         if not self.enable_hybrid_engine:
             for seq in self.running:
@@ -101,10 +118,18 @@ class Scheduler:
         seq.status = SequenceStatus.WAITING
         self.block_manager.deallocate(seq)
         self.waiting.appendleft(seq)
+=======
+        decoding_seqs = []
+        for seq in self.running:
+            if self.block_manager.can_append_or_compress(seq):
+                decoding_seqs.append(seq)
+        return decoding_seqs, False
+>>>>>>> 2aaa790 (init commit)
 
     def postprocess(
         self,
         seqs: list[Sequence],
+<<<<<<< HEAD
         token_ids: Optional[list[int]] = None,
         entropies: Optional[list[float]] = None,
     ) -> list[bool]:
@@ -130,3 +155,21 @@ class Scheduler:
                     self.block_manager.deallocate(seq)
                     self.running.remove(seq)
                     self._deallocate_seq_id(seq)
+=======
+        token_ids: list[int],
+        entropies: Optional[list[float]] = None,
+    ) -> list[bool]:
+        for seq, token_id in zip(seqs, token_ids):
+            if entropies is not None:
+                seq.last_token_entropy = entropies.pop(0)
+            seq.append_token(token_id)
+            self.block_manager.deallocate_block_to_release(seq)
+            seq.require_compress = False
+            if (
+                not seq.ignore_eos and token_id == self.eos
+            ) or seq.num_completion_tokens == seq.max_tokens:
+                seq.status = SequenceStatus.FINISHED
+                self.block_manager.deallocate(seq)
+                self.running.remove(seq)
+                self._deallocate_seq_id(seq)
+>>>>>>> 2aaa790 (init commit)

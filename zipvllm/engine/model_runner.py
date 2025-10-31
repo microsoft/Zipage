@@ -4,8 +4,11 @@ import torch.distributed as dist
 from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
 
+<<<<<<< HEAD
 from time import perf_counter
 from collections import defaultdict
+=======
+>>>>>>> 2aaa790 (init commit)
 
 from zipvllm.layers.sampler import Sampler
 from zipvllm.config import Config
@@ -68,8 +71,11 @@ class ModelRunner:
         torch.set_default_device("cpu")
         torch.set_default_dtype(default_dtype)
 
+<<<<<<< HEAD
         self.time_record = defaultdict(int)
 
+=======
+>>>>>>> 2aaa790 (init commit)
         if self.world_size > 1:
             if rank == 0:
                 self.shm = SharedMemory(name="nanovllm", create=True, size=2**20)
@@ -211,6 +217,7 @@ class ModelRunner:
         return block_tables
 
     def get_query_slot_mapping(
+<<<<<<< HEAD
         self,
         seq: Sequence,
         is_prefill: bool = False,
@@ -227,12 +234,27 @@ class ModelRunner:
                         (seqlen_q + self.block_size - 1) // self.block_size
                     ) * self.block_size - self.query_cache_len
                     for idx, pos in enumerate(range(start, seqlen_q)):
+=======
+        self, seq: Sequence, is_prefill: bool = False, cu_len: int = 0, seqlen: int = 0
+    ):
+        query_slot_mapping = []
+        if is_prefill:
+            if self.query_selection_mode == "recent" or "entropy":
+                if seqlen % self.block_size > self.block_size - self.query_cache_len:
+                    start = seq.num_blocks * self.block_size - self.query_cache_len
+                    for idx, pos in enumerate(range(start, seqlen)):
+>>>>>>> 2aaa790 (init commit)
                         query_slot_mapping.append((cu_len + pos, seq.seq_id, idx))
             elif self.query_selection_mode == "interval":
                 for idx, pos in enumerate(
                     range(
+<<<<<<< HEAD
                         seqlen_q - seq.last_block_num_tokens + self.query_interval,
                         seqlen_q,
+=======
+                        seqlen - seq.last_block_num_tokens + self.query_interval,
+                        seqlen,
+>>>>>>> 2aaa790 (init commit)
                         self.query_interval,
                     )
                 ):
@@ -297,6 +319,7 @@ class ModelRunner:
         max_seqlen_k = 0
         slot_mapping = []
         query_slot_mapping = []
+<<<<<<< HEAD
         block_tables = None
         for seq in seqs:
             seqlen = len(seq)
@@ -308,6 +331,17 @@ class ModelRunner:
             query_slot_mapping.extend(
                 self.get_query_slot_mapping(
                     seq, True, cu_len=cu_seqlens_q[-1], seqlen_q=seqlen_q
+=======
+        for seq in seqs:
+            seqlen = len(seq)
+            input_ids.extend(seq[:])
+            positions.extend(list(range(seqlen)))
+            seqlen_q = seqlen
+            seqlen_k = seqlen
+            query_slot_mapping.extend(
+                self.get_query_slot_mapping(
+                    seq, True, cu_len=cu_seqlens_q[-1], seqlen=seqlen
+>>>>>>> 2aaa790 (init commit)
                 )
             )
             cu_seqlens_q.append(cu_seqlens_q[-1] + seqlen_q)
@@ -324,8 +358,11 @@ class ModelRunner:
                 else:
                     end = start + seq.last_block_num_tokens
                 slot_mapping.extend(list(range(start, end)))
+<<<<<<< HEAD
         if cu_seqlens_k[-1] > cu_seqlens_q[-1]:  # prefix cache
             block_tables = self.prepare_block_tables(seqs)
+=======
+>>>>>>> 2aaa790 (init commit)
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(
             non_blocking=True
         )
@@ -356,24 +393,37 @@ class ModelRunner:
             slot_mapping,
             query_slot_mapping=query_slot_mapping,
             context_lens=None,
+<<<<<<< HEAD
             block_tables=block_tables,
+=======
+            block_tables=None,
+>>>>>>> 2aaa790 (init commit)
         )
         return input_ids, positions
 
     def compress(self, seqs: list[Sequence]):
+<<<<<<< HEAD
         # prepare
+=======
+>>>>>>> 2aaa790 (init commit)
         max_len_block_table = 0
         block_tables = []
         seq_ids = []
         compressed = []
+<<<<<<< HEAD
         target_block_tables = []
+=======
+>>>>>>> 2aaa790 (init commit)
         for seq in seqs:
             assert seq.require_compress
             seq_ids.append(seq.seq_id)
             max_len_block_table = max(max_len_block_table, len(seq.block_table) - 1)
             block_tables.append(seq.block_table[:-2] + [-seq.block_table[-2] - 2])
             compressed.append(seq.compressed)
+<<<<<<< HEAD
             target_block_tables.append(seq.new_block_table[:-2])
+=======
+>>>>>>> 2aaa790 (init commit)
 
         seq_ids = torch.tensor(seq_ids, dtype=torch.int32, pin_memory=True).cuda(
             non_blocking=True
@@ -381,10 +431,13 @@ class ModelRunner:
         compressed = torch.tensor(compressed, dtype=torch.bool, pin_memory=True).cuda(
             non_blocking=True
         )
+<<<<<<< HEAD
         target_block_tables = torch.tensor(
             target_block_tables, dtype=torch.int32, pin_memory=True
         ).cuda(non_blocking=True)
         
+=======
+>>>>>>> 2aaa790 (init commit)
         for i in range(len(block_tables)):
             block_tables[i] = block_tables[i] + [-1] * (
                 max_len_block_table - len(block_tables[i])
@@ -397,6 +450,7 @@ class ModelRunner:
             k_cache = self.kv_cache[0, layer_id]
             v_cache = self.kv_cache[1, layer_id]
             query_cache = self.query_cache[layer_id]
+<<<<<<< HEAD
 
             start_time = perf_counter()
             scores = attention_score(k_cache, query_cache, seq_ids, block_tables)
@@ -407,6 +461,11 @@ class ModelRunner:
             bsz, num_kv_heads, num_blocks, block_size = scores.shape
             if self.use_score_cache:
                 start_time = perf_counter()
+=======
+            scores = attention_score(k_cache, query_cache, seq_ids, block_tables)
+            bsz, num_kv_heads, num_blocks, block_size = scores.shape
+            if self.use_score_cache:
+>>>>>>> 2aaa790 (init commit)
                 scores = scores.view(bsz, num_kv_heads, -1)
                 scores = scores.div_(scores.max(dim=-1, keepdim=True).values)
                 scores = scores.view(bsz, num_kv_heads, num_blocks, block_size)
@@ -417,6 +476,7 @@ class ModelRunner:
                     compressed,
                     self.decay_factor,
                 )
+<<<<<<< HEAD
                 end_time = perf_counter()
                 self.time_record["global_score"] = end_time - start_time
                 self.time_record["global_score_sum"] += end_time - start_time
@@ -424,6 +484,11 @@ class ModelRunner:
             scores = scores.view(bsz, num_kv_heads, -1)
             if self.use_similarity:
                 start_time = perf_counter()
+=======
+
+            scores = scores.view(bsz, num_kv_heads, -1)
+            if self.use_similarity:
+>>>>>>> 2aaa790 (init commit)
                 similarity = raw_similarity_score(k_cache, block_tables).view(
                     bsz, num_kv_heads, -1
                 )
@@ -435,11 +500,15 @@ class ModelRunner:
                     scores * (1 - self.similarity_factor)
                     + similarity * self.similarity_factor
                 )
+<<<<<<< HEAD
                 end_time = perf_counter()
                 self.time_record["similarity_score"] = end_time - start_time
                 self.time_record["similarity_score_sum"] += end_time - start_time
             if self.use_attention_sink:
                 start_time = perf_counter()
+=======
+            if self.use_attention_sink:
+>>>>>>> 2aaa790 (init commit)
                 mask = (
                     torch.arange(block_size * num_blocks, device=scores.device)
                     .unsqueeze(0)
@@ -447,15 +516,21 @@ class ModelRunner:
                     < self.sink_len
                 )
                 scores = scores.masked_fill_(mask, float("inf"))
+<<<<<<< HEAD
                 end_time = perf_counter()
                 self.time_record["attention_sink"] = end_time - start_time
                 self.time_record["attention_sink_sum"] += end_time - start_time
             scores = scores.view(bsz, num_kv_heads, num_blocks, block_size)
             start_time = perf_counter()
+=======
+            scores = scores.view(bsz, num_kv_heads, num_blocks, block_size)
+
+>>>>>>> 2aaa790 (init commit)
             mask = (block_tables == -1).unsqueeze(1).unsqueeze(-1)
             scores = scores.masked_fill_(mask, -float("inf"))
             scores = scores.view(bsz, num_kv_heads, -1)
             keep_flag = topk_mask(
+<<<<<<< HEAD
                 scores, self.block_size * (self.max_blocks_per_seq - 2)
             )
             keep_flag = keep_flag.view(bsz, num_kv_heads, num_blocks, block_size)
@@ -467,6 +542,15 @@ class ModelRunner:
             start_time = perf_counter()
             if self.keep_order:
                 compress_kv(k_cache, v_cache, keep_flag, block_tables)
+=======
+                scores, self.block_size * (self.max_blocks_per_seq - 2), dim=-1
+            )
+            keep_flag = keep_flag.view(bsz, num_kv_heads, num_blocks, block_size)
+            if self.keep_order:
+                compress_kv(k_cache, v_cache, keep_flag, block_tables)
+                if self.use_score_cache:
+                    compress_score(self.score_cache[layer_id], keep_flag, block_tables)
+>>>>>>> 2aaa790 (init commit)
             else:
                 save_indices, load_indices = get_compress_slot_indices(
                     keep_flag, block_tables, self.max_blocks_per_seq - 2
@@ -474,6 +558,7 @@ class ModelRunner:
                 compress_kv_out_order(
                     k_cache, v_cache, save_indices, load_indices, block_tables
                 )
+<<<<<<< HEAD
             end_time = perf_counter()
             self.time_record["compress_kv"] = end_time - start_time
             self.time_record["compress_kv_sum"] += end_time - start_time
@@ -483,15 +568,31 @@ class ModelRunner:
                 if self.keep_order:
                     compress_score(self.score_cache[layer_id], keep_flag, block_tables)
                 else:
+=======
+                if self.use_score_cache:
+>>>>>>> 2aaa790 (init commit)
                     compress_score_out_order(
                         self.score_cache[layer_id],
                         save_indices,
                         load_indices,
                         block_tables,
                     )
+<<<<<<< HEAD
             end_time = perf_counter()
             self.time_record["compress_score"] = end_time - start_time
             self.time_record["compress_score_sum"] += end_time - start_time
+=======
+
+        for seq in seqs:
+            if len(seq.block_table) > self.max_blocks_per_seq:
+                seq.block_to_release = seq.block_table[self.max_blocks_per_seq - 1 : -1]
+            seq.block_table = (
+                seq.block_table[: self.max_blocks_per_seq - 2]
+                + [seq.block_table[-1]]
+                + [seq.block_table[self.max_blocks_per_seq - 2]]
+            )
+            seq.compressed = True
+>>>>>>> 2aaa790 (init commit)
         return seqs
 
     def prepare_decode(self, seqs: list[Sequence]):
