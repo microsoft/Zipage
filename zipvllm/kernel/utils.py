@@ -18,28 +18,30 @@ def _strides(x: torch.Tensor, *stride_names: str):
     return {f"stride_{s}": x.stride(i) for i, s in enumerate(stride_names)}
 
 
-@torch.compile
-def topk_mask(input: torch.Tensor, k: int, dim: int = -1):
+def topk_mask(scores: torch.Tensor, k: int):
     """
-
     calculate if the last dimension of input is top-k, return a bool mask with the same shape
     top-k is True, others are False
+
+    Arguments:
+        scores: Shape (batch_size, num_kv_heads, seq_len)
+        k: int
+        dim: int
+    Returns:
+        mask: Shape (batch_size, num_kv_heads, seq_len)
     """
-    topk_indices = torch.topk(input, k, dim=dim)[1]
-    mask = torch.zeros_like(input, dtype=torch.bool)
-    mask.scatter_(dim, topk_indices, True)
+    topk_indices = torch.topk(scores, k, dim=-1)[1]
+    mask = torch.zeros_like(scores, dtype=torch.bool)
+    mask.scatter_(-1, topk_indices, True)
     return mask
 
 
-@torch.compile
 def get_compress_slot_indices(
     flag: torch.Tensor, block_table: torch.Tensor, kept_blocks: int
 ):
     block_valid_mask = (block_table[:, kept_blocks:][:, None, :, None]) != -1
 
-    save_indices = (
-        (~flag[:, :, :kept_blocks, :]).nonzero(as_tuple=False).contiguous()
-    )
+    save_indices = (~flag[:, :, :kept_blocks, :]).nonzero(as_tuple=False).contiguous()
     load_indices = (
         (flag[:, :, kept_blocks:, :] & block_valid_mask)
         .nonzero(as_tuple=False)

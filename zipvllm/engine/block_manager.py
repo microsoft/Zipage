@@ -37,6 +37,7 @@ class BlockManager:
             block_id = self.free_block_ids[0]
             self._allocate_block(block_id)
             seq.block_table.append(block_id)
+        seq.num_cached_tokens = len(seq)
 
     def deallocate(self, seq: Sequence):
         for block_id in reversed(seq.block_table):
@@ -49,17 +50,45 @@ class BlockManager:
             self._deallocate_block(block_id)
         seq.block_to_release.clear()
 
-    def can_append_or_compress(self, seq: Sequence):
+    def can_append_or_compress(self, seq: Sequence, strict: bool = False) -> bool:
+        if seq.require_compress:
+            # async compress not finished
+            return False
         block_table = seq.block_table
-        if len(seq) % self.block_size == 1:
-            if len(block_table) < self.max_blocks_per_seq:
-                if len(self.free_block_ids) > 0:
-                    block_id = self.free_block_ids[0]
-                    self._allocate_block(block_id)
-                    block_table.append(block_id)
+        if len(seq) % self.block_size == 1 and (
+            seq.num_cached_tokens > self.block_size * len(block_table)
+        ):
+            if strict:
+                if len(block_table) < self.max_blocks_per_seq:
+                    if not len(self.free_block_ids) > 0:
+                        # suspend
+                        return False
                 else:
-                    # suspend
-                    return False
+                    seq.require_compress = True
             else:
-                seq.require_compress = True
+                if not len(self.free_block_ids) > 0:
+                    if len(block_table) < self.max_blocks_per_seq:
+                        return False
+                    else:
+                        seq.require_compress = True
         return True
+
+    def can_append(self, seq: Sequence, strict: bool = False):
+        if len(seq) % self.block_size == 1:
+            if strict:
+                return (
+                    len(self.free_block_ids) > 0
+                    and len(seq.block_table) < self.max_blocks_per_seq - 1
+                )
+            else:
+                return len(self.free_block_ids) > 0
+        return True
+
+    def may_append(self, seq: Sequence):
+        if len(seq) % self.block_size == 1 and (
+            seq.num_cached_tokens > self.block_size * len(seq.block_table)
+        ):
+            if not seq.require_compress:
+                block_id = self.free_block_ids[0]
+                self._allocate_block(block_id)
+                seq.block_table.append(block_id)

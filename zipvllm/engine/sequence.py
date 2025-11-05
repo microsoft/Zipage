@@ -23,7 +23,7 @@ class Sequence:
         self.last_token = token_ids[-1]
         self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = len(token_ids)
-        # self.num_cached_tokens = 0
+        self.num_cached_tokens = 0
         self.block_table = []
         self.block_to_release = []
         self.require_compress = False
@@ -82,6 +82,7 @@ class Sequence:
         self.token_ids.append(token_id)
         self.last_token = token_id
         self.num_tokens += 1
+        self.num_cached_tokens += 1
 
     def __getstate__(self):
         return (

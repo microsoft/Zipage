@@ -5,12 +5,15 @@ from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 import torch.multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 from zipvllm.config import Config
 from zipvllm.sampling_params import SamplingParams
 from zipvllm.engine.sequence import Sequence
 from zipvllm.engine.scheduler import Scheduler
 from zipvllm.engine.model_runner import ModelRunner
+
+from collections import defaultdict
 
 
 class LLMEngine:
@@ -51,6 +54,12 @@ class LLMEngine:
         self.executor = ThreadPoolExecutor(max_workers=2)
         self.compress_future = None
         self.run_future = None
+        self.enable_async_compress = config.enable_async_compress
+        self.enable_hybrid_engine = config.enable_hybrid_engine
+
+        # Add threading events for task completion
+        self.compress_task_event = threading.Event()
+        self.time_record = defaultdict(int)
 
         atexit.register(self.exit)
 
@@ -68,15 +77,18 @@ class LLMEngine:
         self.scheduler.add(seq)
 
     def _compress_task(self, compress_seqs: list[Sequence]):
+        self.compress_task_event.set()
         self.model_runner.call("compress", compress_seqs)
+        self.scheduler.postprocess(compress_seqs)
+        self.compress_task_event.clear()
 
     def _run_task(self, run_seqs: list[Sequence], is_prefill: bool):
         token_ids, entropy = self.model_runner.call("run", run_seqs, is_prefill)
         self.scheduler.postprocess(run_seqs, token_ids, entropy)
-        return token_ids, entropy
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
+        start_time = perf_counter()
         if not is_prefill:
             compress_seqs: list[Sequence] = []
             for seq in seqs:
@@ -84,8 +96,16 @@ class LLMEngine:
                     compress_seqs.append(seq)
             if compress_seqs:
                 self.model_runner.call("compress", compress_seqs)
+        end_time = perf_counter()
+        self.time_record["compress"] += end_time - start_time
+        start_time = perf_counter()
         token_ids, entropy = self.model_runner.call("run", seqs, is_prefill)
         self.scheduler.postprocess(seqs, token_ids, entropy)
+        end_time = perf_counter()
+        if is_prefill:
+            self.time_record["prefill"] += end_time - start_time
+        else:
+            self.time_record["decode"] += end_time - start_time
         outputs = [
             (seq.request_id, seq.completion_token_ids)
             for seq in seqs
@@ -95,6 +115,8 @@ class LLMEngine:
         return outputs, num_tokens
 
     def async_step(self):
+        compress_task_completed = not self.compress_task_event.is_set()
+
         seqs, is_prefill = self.scheduler.schedule()
         compress_seqs: list[Sequence] = []
         run_seqs: list[Sequence] = []
@@ -105,17 +127,25 @@ class LLMEngine:
             else:
                 run_seqs.append(seq)
 
-        self.compress_future = self.executor.submit(
-            self._compress_task, compress_seqs if compress_seqs else None
-        )
+        if compress_task_completed:
+            self.compress_future = (
+                self.executor.submit(self._compress_task, compress_seqs)
+                if compress_seqs
+                else None
+            )
+
+        start_time = perf_counter()
         self.run_future = (
             self.executor.submit(self._run_task, run_seqs, is_prefill)
             if run_seqs
             else None
         )
+        end_time = perf_counter()
+        if is_prefill:
+            self.time_record["prefill"] += end_time - start_time
+        else:
+            self.time_record["decode"] += end_time - start_time
 
-        if self.compress_future is not None:
-            self.compress_future.result()
         if self.run_future is not None:
             self.run_future.result()
 
@@ -124,7 +154,7 @@ class LLMEngine:
             for seq in run_seqs
             if seq.is_finished
         ]
-        num_tokens = sum(len(seq) for seq in run_seqs) if is_prefill else -len(seqs)
+        num_tokens = sum(len(seq) for seq in run_seqs) if is_prefill else -len(run_seqs)
         return outputs, num_tokens
 
     def is_finished(self):
@@ -175,7 +205,10 @@ class LLMEngine:
         self.reset_logger()
         while not self.is_finished():
             t = perf_counter()
-            output, num_tokens = self.step()
+            if self.enable_async_compress:
+                output, num_tokens = self.async_step()
+            else:
+                output, num_tokens = self.step()
             current_time = perf_counter()
             if num_tokens > 0:
                 prefill_throughput = num_tokens / (current_time - t)

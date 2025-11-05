@@ -20,6 +20,8 @@ class Scheduler:
         self.running: deque[Sequence] = deque()
         self.free_seq_ids: deque[int] = deque(range(config.max_num_seqs))
         self.used_seq_ids: set[int] = set()
+        self.enable_hybrid_engine = config.enable_hybrid_engine
+        self.strict_max_blocks = config.strict_max_blocks
 
     def is_finished(self):
         return not self.waiting and not self.running
@@ -33,20 +35,24 @@ class Scheduler:
         seq.seq_id = seq_id
 
     def _deallocate_seq_id(self, seq: Sequence):
-        self.used_seq_ids.remove(seq.seq_id)
-        self.free_seq_ids.append(seq.seq_id)
+        if seq.seq_id != -1:
+            self.used_seq_ids.remove(seq.seq_id)
+            self.free_seq_ids.append(seq.seq_id)
 
     def schedule(self) -> tuple[list[Sequence], bool]:
         # prefill
         prefilling_seqs = []
         num_batched_tokens = 0
-        while self.waiting and len(self.free_seq_ids) > 0:
+        while self.waiting:
             seq = self.waiting[0]
             if num_batched_tokens + len(
                 seq
             ) > self.max_num_batched_tokens or not self.block_manager.can_allocate(seq):
                 break
-            self._allocate_seq_id(seq)
+            if (not self.enable_hybrid_engine) and len(self.free_seq_ids) == 0:
+                break
+            if len(self.free_seq_ids) > 0:
+                self._allocate_seq_id(seq)
             self.block_manager.allocate(seq)
             num_batched_tokens += len(seq)
             seq.status = SequenceStatus.RUNNING
@@ -57,28 +63,61 @@ class Scheduler:
             return prefilling_seqs, True
 
         # decode
-        decoding_seqs = []
-        for seq in self.running:
-            if self.block_manager.can_append_or_compress(seq):
-                decoding_seqs.append(seq)
-        return decoding_seqs, False
+        decoding_and_compressing_seqs = []
+        if not self.enable_hybrid_engine:
+            for seq in self.running:
+                if self.block_manager.can_append_or_compress(seq, True):
+                    self.block_manager.may_append(seq)
+                    decoding_and_compressing_seqs.append(seq)
+        else:
+            seq_to_preempt = []
+            for seq in self.running:
+                if seq.seq_id == -1 and len(self.free_seq_ids) > 0:
+                    self._allocate_seq_id(seq)
+                if seq.seq_id != -1:
+                    if self.block_manager.can_append_or_compress(
+                        seq, self.strict_max_blocks
+                    ):
+                        self.block_manager.may_append(seq)
+                        decoding_and_compressing_seqs.append(seq)
+                else:
+                    if self.block_manager.can_append(seq, self.strict_max_blocks):
+                        self.block_manager.may_append(seq)
+                        decoding_and_compressing_seqs.append(seq)
+                    else:
+                        self.preempt(seq)
+                        seq_to_preempt.append(seq)
+            for seq in seq_to_preempt:
+                self.running.remove(seq)
+        return decoding_and_compressing_seqs, False
+
+    def preempt(self, seq: Sequence):
+        seq.status = SequenceStatus.WAITING
+        self.block_manager.deallocate(seq)
+        self.waiting.appendleft(seq)
 
     def postprocess(
         self,
         seqs: list[Sequence],
-        token_ids: list[int],
+        token_ids: Optional[list[int]] = None,
         entropies: Optional[list[float]] = None,
     ) -> list[bool]:
-        for seq, token_id in zip(seqs, token_ids):
+        for seq in seqs:
             if entropies is not None:
                 seq.last_token_entropy = entropies.pop(0)
-            seq.append_token(token_id)
-            self.block_manager.deallocate_block_to_release(seq)
-            seq.require_compress = False
-            if (
-                not seq.ignore_eos and token_id == self.eos
-            ) or seq.num_completion_tokens == seq.max_tokens:
-                seq.status = SequenceStatus.FINISHED
-                self.block_manager.deallocate(seq)
-                self.running.remove(seq)
-                self._deallocate_seq_id(seq)
+            if seq.require_compress:
+                self.block_manager.deallocate_block_to_release(seq)
+                seq.num_cached_tokens = (
+                    len(seq.block_table) - 1
+                ) * self.block_manager.block_size + 1
+                seq.require_compress = False
+            if token_ids is not None:
+                token_id = token_ids.pop(0)
+                seq.append_token(token_id)
+                if (
+                    not seq.ignore_eos and token_id == self.eos
+                ) or seq.num_completion_tokens == seq.max_tokens:
+                    seq.status = SequenceStatus.FINISHED
+                    self.block_manager.deallocate(seq)
+                    self.running.remove(seq)
+                    self._deallocate_seq_id(seq)

@@ -25,12 +25,13 @@ class Config:
     decay_factor: float = 0.6
     similarity_factor: float = 0.4
     use_similarity: bool = False
-    use_attention_sink: bool = True
+    use_attention_sink: bool = False
     sink_len: int = 4
-    keep_order: bool = True
+    keep_order: bool = False
     repetition_penalty: float = 1.0
     enable_async_compress: bool = False
     enable_hybrid_engine: bool = False
+    strict_max_blocks: bool = False
 
     def __post_init__(self):
         assert os.path.isdir(self.model)

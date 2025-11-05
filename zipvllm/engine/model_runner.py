@@ -4,6 +4,8 @@ import torch.distributed as dist
 from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
 
+from time import perf_counter
+from collections import defaultdict
 
 from zipvllm.layers.sampler import Sampler
 from zipvllm.config import Config
@@ -65,6 +67,9 @@ class ModelRunner:
             self.capture_cudagraph()
         torch.set_default_device("cpu")
         torch.set_default_dtype(default_dtype)
+
+
+        self.time_record = defaultdict(int)
 
         if self.world_size > 1:
             if rank == 0:
@@ -210,6 +215,8 @@ class ModelRunner:
         self, seq: Sequence, is_prefill: bool = False, cu_len: int = 0, seqlen: int = 0
     ):
         query_slot_mapping = []
+        if seq.seq_id == -1:
+            return query_slot_mapping
         if is_prefill:
             if self.query_selection_mode == "recent" or "entropy":
                 if seqlen % self.block_size > self.block_size - self.query_cache_len:
@@ -345,6 +352,8 @@ class ModelRunner:
         return input_ids, positions
 
     def compress(self, seqs: list[Sequence]):
+        # prepare
+        start_time = perf_counter()
         max_len_block_table = 0
         block_tables = []
         seq_ids = []
@@ -369,14 +378,22 @@ class ModelRunner:
         block_tables = torch.tensor(
             block_tables, dtype=torch.int32, pin_memory=True
         ).cuda(non_blocking=True)
+        end_time = perf_counter()
+        self.time_record["prepare"] += end_time - start_time
 
         for layer_id in range(len(self.model.model.layers)):
             k_cache = self.kv_cache[0, layer_id]
             v_cache = self.kv_cache[1, layer_id]
             query_cache = self.query_cache[layer_id]
+            
+            start_time = perf_counter()
             scores = attention_score(k_cache, query_cache, seq_ids, block_tables)
+            end_time = perf_counter()
+            self.time_record["attention_score"] += end_time - start_time
+            
             bsz, num_kv_heads, num_blocks, block_size = scores.shape
             if self.use_score_cache:
+                start_time = perf_counter()
                 scores = scores.view(bsz, num_kv_heads, -1)
                 scores = scores.div_(scores.max(dim=-1, keepdim=True).values)
                 scores = scores.view(bsz, num_kv_heads, num_blocks, block_size)
@@ -387,9 +404,12 @@ class ModelRunner:
                     compressed,
                     self.decay_factor,
                 )
+                end_time = perf_counter()
+                self.time_record["global_score"] += end_time - start_time
 
             scores = scores.view(bsz, num_kv_heads, -1)
             if self.use_similarity:
+                start_time = perf_counter()
                 similarity = raw_similarity_score(k_cache, block_tables).view(
                     bsz, num_kv_heads, -1
                 )
@@ -401,7 +421,10 @@ class ModelRunner:
                     scores * (1 - self.similarity_factor)
                     + similarity * self.similarity_factor
                 )
+                end_time = perf_counter()
+                self.time_record["similarity_score"] += end_time - start_time
             if self.use_attention_sink:
+                start_time = perf_counter()
                 mask = (
                     torch.arange(block_size * num_blocks, device=scores.device)
                     .unsqueeze(0)
@@ -409,15 +432,23 @@ class ModelRunner:
                     < self.sink_len
                 )
                 scores = scores.masked_fill_(mask, float("inf"))
+                end_time = perf_counter()
+                self.time_record["attention_sink"] += end_time - start_time
             scores = scores.view(bsz, num_kv_heads, num_blocks, block_size)
-
+            start_time = perf_counter()
             mask = (block_tables == -1).unsqueeze(1).unsqueeze(-1)
             scores = scores.masked_fill_(mask, -float("inf"))
             scores = scores.view(bsz, num_kv_heads, -1)
             keep_flag = topk_mask(
-                scores, self.block_size * (self.max_blocks_per_seq - 2), dim=-1
+                scores, self.block_size * (self.max_blocks_per_seq - 2)
             )
             keep_flag = keep_flag.view(bsz, num_kv_heads, num_blocks, block_size)
+            end_time = perf_counter()
+            self.time_record["topk_mask"] += end_time - start_time
+            start_time = perf_counter()
+
+            
+            start_time = perf_counter()
             if self.keep_order:
                 compress_kv(k_cache, v_cache, keep_flag, block_tables)
                 if self.use_score_cache:
@@ -436,6 +467,8 @@ class ModelRunner:
                         load_indices,
                         block_tables,
                     )
+            end_time = perf_counter()
+            self.time_record["compress_kv"] += end_time - start_time
 
         for seq in seqs:
             if len(seq.block_table) > self.max_blocks_per_seq:
