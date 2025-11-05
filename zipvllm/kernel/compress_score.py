@@ -18,13 +18,8 @@ def compress_score_kernel(
     stride_fl,
     stride_tb,
     stride_tn,
-<<<<<<< HEAD
     batch_size: tl.int32,
     max_num_blocks_per_seq: tl.int32,
-=======
-    batch_size: tl.constexpr,
-    max_num_blocks_per_seq: tl.constexpr,
->>>>>>> 2aaa790 (init commit)
     block_size: tl.constexpr,
 ):
     pid = tl.program_id(0)

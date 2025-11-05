@@ -26,15 +26,9 @@ def compress_kv_kernel(
     stride_tn,
     BLOCK_D: tl.constexpr,
     MODEL_D: tl.constexpr,
-<<<<<<< HEAD
     block_size: tl.constexpr,
     batch_size: tl.int32,
     max_num_blocks_per_seq: tl.int32,
-=======
-    batch_size: tl.constexpr,
-    block_size: tl.constexpr,
-    max_num_blocks_per_seq: tl.constexpr,
->>>>>>> 2aaa790 (init commit)
 ):
     pid = tl.program_id(0)
     batch_idx = pid % batch_size
@@ -127,12 +121,7 @@ def compress_kv(
         **_strides(block_table, "tb", "tn"),
         BLOCK_D=BLOCK_D,
         MODEL_D=head_dim,
-<<<<<<< HEAD
         block_size=block_size,
         batch_size=batch_size,
-=======
-        batch_size=batch_size,
-        block_size=block_size,
->>>>>>> 2aaa790 (init commit)
         max_num_blocks_per_seq=max_num_blocks_per_seq,
     )

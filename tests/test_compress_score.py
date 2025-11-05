@@ -124,6 +124,8 @@ def load_score_cache(score_cache, block_table):
         for j in range(max_num_blocks_per_seq):
             block_id = block_table[i, j]
             if not block_id == -1:
+                if block_id < 0:
+                    block_id = -block_id - 2
                 score[i, j, :, :] = score_cache[block_id, :, :]
     return score.permute(0, 3, 1, 2)
 
@@ -198,7 +200,9 @@ def test():
 
     # store score
     time_start = time.time()
-    maxed_score = global_score(result, score_cache, block_table, compressed)
+    maxed_score = global_score(result, score_cache, block_table, compressed).reshape(
+        2, num_kv_heads, -1
+    )
     time_end = time.time()
     loaded_score = load_score_cache(score_cache, block_table)
     result = result.reshape(2, num_kv_heads, -1)
