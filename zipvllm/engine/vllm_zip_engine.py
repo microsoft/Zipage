@@ -140,14 +140,15 @@ class LLMEngine:
             if run_seqs
             else None
         )
+
+        if self.run_future is not None:
+            self.run_future.result()
+
         end_time = perf_counter()
         if is_prefill:
             self.time_record["prefill"] += end_time - start_time
         else:
             self.time_record["decode"] += end_time - start_time
-
-        if self.run_future is not None:
-            self.run_future.result()
 
         outputs = [
             (seq.request_id, seq.completion_token_ids)

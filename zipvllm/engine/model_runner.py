@@ -353,7 +353,6 @@ class ModelRunner:
 
     def compress(self, seqs: list[Sequence]):
         # prepare
-        start_time = perf_counter()
         max_len_block_table = 0
         block_tables = []
         seq_ids = []
@@ -378,8 +377,6 @@ class ModelRunner:
         block_tables = torch.tensor(
             block_tables, dtype=torch.int32, pin_memory=True
         ).cuda(non_blocking=True)
-        end_time = perf_counter()
-        self.time_record["prepare"] += end_time - start_time
 
         for layer_id in range(len(self.model.model.layers)):
             k_cache = self.kv_cache[0, layer_id]
@@ -473,12 +470,12 @@ class ModelRunner:
         for seq in seqs:
             if len(seq.block_table) > self.max_blocks_per_seq:
                 seq.block_to_release = seq.block_table[self.max_blocks_per_seq - 1 : -1]
+            seq.compressed = True
             seq.block_table = (
                 seq.block_table[: self.max_blocks_per_seq - 2]
                 + [seq.block_table[-1]]
                 + [seq.block_table[self.max_blocks_per_seq - 2]]
             )
-            seq.compressed = True
         return seqs
 
     def prepare_decode(self, seqs: list[Sequence]):

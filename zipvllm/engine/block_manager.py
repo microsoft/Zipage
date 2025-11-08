@@ -51,9 +51,6 @@ class BlockManager:
         seq.block_to_release.clear()
 
     def can_append_or_compress(self, seq: Sequence, strict: bool = False) -> bool:
-        if seq.require_compress:
-            # async compress not finished
-            return False
         block_table = seq.block_table
         if len(seq) % self.block_size == 1 and (
             seq.num_cached_tokens > self.block_size * len(block_table)

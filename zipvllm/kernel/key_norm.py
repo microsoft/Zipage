@@ -20,9 +20,9 @@ def norm_kernel(
     stride_tz,
     stride_tb,
     BLOCK_S: tl.constexpr,
-    max_num_blocks_per_seq: tl.constexpr,
+    max_num_blocks_per_seq: tl.int32,
     block_size: tl.constexpr,
-    batch_size: tl.constexpr,
+    batch_size: tl.int32,
     head_dim: tl.constexpr,
 ):
     pid = tl.program_id(0)

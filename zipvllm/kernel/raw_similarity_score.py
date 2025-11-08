@@ -33,11 +33,11 @@ def raw_similarity_score_kernel(
     stride_tb,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
-    max_num_blocks_per_seq: tl.constexpr,
+    max_num_blocks_per_seq: tl.int32,
     block_size: tl.constexpr,
-    batch_size: tl.constexpr,
+    batch_size: tl.int32,
     head_dim: tl.constexpr,
-    threshold: tl.constexpr,
+    threshold: tl.float32,
 ):
     pid = tl.program_id(0)
     batch_idx = pid % batch_size

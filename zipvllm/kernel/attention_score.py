@@ -28,17 +28,15 @@ def attention_score_kernel(
     stride_tn,
     H_q: tl.constexpr,
     H_kv: tl.constexpr,
-    G_q: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     ACTUAL_BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
     IS_GQA: tl.constexpr,
-    softmax_scale: tl.constexpr,
-    BATCH_SIZE: tl.constexpr,
-    max_num_blocks_per_seq: tl.constexpr,
+    softmax_scale: tl.float32,
     BLOCK_SIZE: tl.constexpr,
     QUERY_CACHE_LEN: tl.constexpr,
+    max_num_blocks_per_seq: tl.int32,
 ):
     pid = tl.program_id(0)
     num_q_blocks = tl.cdiv(QUERY_CACHE_LEN, BLOCK_M)
@@ -168,17 +166,15 @@ def attention_score(
         **_strides(block_table, "tb", "tn"),
         H_q=num_attention_heads,
         H_kv=num_kv_heads,
-        G_q=G_q,
         BLOCK_M=BLOCK_M,
         BLOCK_DMODEL=BLOCK_HEAD_DIM,
         ACTUAL_BLOCK_DMODEL=head_dim,
         BLOCK_N=BLOCK_N,
         IS_GQA=IS_GQA,
         softmax_scale=softmax_scale,
-        BATCH_SIZE=batch_size,
-        max_num_blocks_per_seq=max_num_blocks_per_seq,
         BLOCK_SIZE=block_size,
         QUERY_CACHE_LEN=query_cache_len,
+        max_num_blocks_per_seq=max_num_blocks_per_seq,
     )
 
     qk_buffer = qk_buffer.reshape(batch_size, num_attention_heads, query_cache_len, -1)
