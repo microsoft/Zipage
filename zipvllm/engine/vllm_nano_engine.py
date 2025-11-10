@@ -11,6 +11,7 @@ from nanovllm.engine.sequence import Sequence
 from nanovllm.engine.scheduler import Scheduler
 from nanovllm.engine.model_runner import ModelRunner
 
+from collections import defaultdict
 
 class LLMEngine:
 
@@ -31,17 +32,8 @@ class LLMEngine:
         self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
         config.eos = self.tokenizer.eos_token_id
         self.scheduler = Scheduler(config)
-        enable_log = kwargs.get("enable_log", False)
-        if enable_log:
-            self.logger = {
-                "throughput": [],
-                "running_seqs": [],
-                "waiting_seqs": [],
-                "block_occupancy": [],
-                "time": [],
-            }
-        else:
-            self.logger = None
+        self.enable_log = kwargs.get("enable_log", False)
+        self.logger = defaultdict(list)
         atexit.register(self.exit)
 
     def exit(self):
@@ -70,15 +62,10 @@ class LLMEngine:
         return self.scheduler.is_finished()
 
     def reset_logger(self):
-        if self.logger:
-            self.logger["throughput"] = []
-            self.logger["running_seqs"] = []
-            self.logger["waiting_seqs"] = []
-            self.logger["block_occupancy"] = []
-            self.logger["time"] = []
+        self.logger.clear()
 
     def log_step(self, time_from_start, running_seqs, waiting_seqs, decode_throughput):
-        if self.logger:
+        if self.enable_log:
             block_occupancy = len(self.scheduler.block_manager.used_block_ids) / (
                 len(self.scheduler.block_manager.used_block_ids)
                 + len(self.scheduler.block_manager.free_block_ids)
@@ -114,6 +101,7 @@ class LLMEngine:
         prefill_throughput = decode_throughput = 0.0
         start_time = perf_counter()
         self.reset_logger()
+        dt = start_time
         while not self.is_finished():
             t = perf_counter()
             output, num_tokens = self.step()
@@ -121,7 +109,8 @@ class LLMEngine:
             if num_tokens > 0:
                 prefill_throughput = num_tokens / (current_time - t)
             else:
-                decode_throughput = -num_tokens / (current_time - t)
+                decode_throughput = -num_tokens / (current_time - dt)
+                dt = current_time
             pbar.set_postfix(
                 {
                     "Prefill": f"{int(prefill_throughput)}tok/s",

@@ -38,19 +38,8 @@ class LLMEngine:
         config.pad = self.tokenizer.pad_token_id
         self.scheduler = Scheduler(config)
 
-        enable_log = kwargs.get("enable_log", False)
-        if enable_log:
-            self.logger = {}
-            for key in [
-                "throughput",
-                "running_seqs",
-                "waiting_seqs",
-                "block_occupancy",
-                "time",
-            ]:
-                self.logger[key] = []
-        else:
-            self.logger = None
+        self.enable_log = kwargs.get("enable_log", False)
+        self.logger = defaultdict(list)
         self.executor = ThreadPoolExecutor(max_workers=2)
         self.compress_future = None
         self.run_future = None
@@ -88,24 +77,27 @@ class LLMEngine:
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
-        start_time = perf_counter()
         if not is_prefill:
             compress_seqs: list[Sequence] = []
             for seq in seqs:
                 if seq.require_compress:
                     compress_seqs.append(seq)
             if compress_seqs:
+                start_time = perf_counter()
                 self.model_runner.call("compress", compress_seqs)
-        end_time = perf_counter()
-        self.time_record["compress"] += end_time - start_time
+                end_time = perf_counter()
+                self.time_record["compress"] = end_time - start_time
+                self.time_record["compress_sum"] += end_time - start_time
         start_time = perf_counter()
         token_ids, entropy = self.model_runner.call("run", seqs, is_prefill)
         self.scheduler.postprocess(seqs, token_ids, entropy)
         end_time = perf_counter()
         if is_prefill:
-            self.time_record["prefill"] += end_time - start_time
+            self.time_record["prefill"] = end_time - start_time
+            self.time_record["prefill_sum"] += end_time - start_time
         else:
-            self.time_record["decode"] += end_time - start_time
+            self.time_record["decode"] = end_time - start_time
+            self.time_record["decode_sum"] += end_time - start_time
         outputs = [
             (seq.request_id, seq.completion_token_ids)
             for seq in seqs
@@ -146,9 +138,11 @@ class LLMEngine:
 
         end_time = perf_counter()
         if is_prefill:
-            self.time_record["prefill"] += end_time - start_time
+            self.time_record["prefill"] = end_time - start_time
+            self.time_record["prefill_sum"] += end_time - start_time
         else:
-            self.time_record["decode"] += end_time - start_time
+            self.time_record["decode"] = end_time - start_time
+            self.time_record["decode_sum"] += end_time - start_time
 
         outputs = [
             (seq.request_id, seq.completion_token_ids)
@@ -162,9 +156,7 @@ class LLMEngine:
         return self.scheduler.is_finished()
 
     def reset_logger(self):
-        if self.logger:
-            for key in self.logger:
-                self.logger[key].clear()
+        self.logger.clear()
 
     def _append_log_entry(
         self, time_from_start, running_seqs, waiting_seqs, decode_throughput
@@ -177,12 +169,20 @@ class LLMEngine:
         )
         self.logger["time"].append(time_from_start)
 
+        for key in self.time_record:
+            if not key.endswith("_sum"):
+                self.logger[key].append(self.time_record[key])
+
+        for key in self.model_runner.time_record:
+            if not key.endswith("_sum"):
+                self.logger[key].append(self.model_runner.time_record[key])
+
     def log_step(self, time_from_start, running_seqs, waiting_seqs, decode_throughput):
-        if not self.logger:
+        if not self.enable_log:
             return
-        should_log = (
-            not self.logger["time"] or time_from_start - self.logger["time"][-1] > 5
-        )
+        should_log = ("time" not in self.logger) or time_from_start - self.logger[
+            "time"
+        ][-1] > 5
         if should_log:
             self._append_log_entry(
                 time_from_start, running_seqs, waiting_seqs, decode_throughput
@@ -204,6 +204,7 @@ class LLMEngine:
         prefill_throughput = decode_throughput = 0.0
         start_time = perf_counter()
         self.reset_logger()
+        dt = start_time
         while not self.is_finished():
             t = perf_counter()
             if self.enable_async_compress:
@@ -214,7 +215,8 @@ class LLMEngine:
             if num_tokens > 0:
                 prefill_throughput = num_tokens / (current_time - t)
             else:
-                decode_throughput = -num_tokens / (current_time - t)
+                decode_throughput = -num_tokens / (current_time - dt)
+                dt = current_time
             pbar.set_postfix(
                 {
                     "Prefill": f"{int(prefill_throughput)}tok/s",

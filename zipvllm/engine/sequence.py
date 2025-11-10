@@ -25,7 +25,8 @@ class Sequence:
         self.num_prompt_tokens = len(token_ids)
         self.num_cached_tokens = 0
         self.block_table = []
-        self.block_to_release = []
+        self.new_block_table = None
+        self.block_to_release = None
         self.require_compress = False
         self.compressed = False
         self.temperature = sampling_params.temperature

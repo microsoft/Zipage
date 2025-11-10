@@ -49,8 +49,14 @@ class Scheduler:
                 seq
             ) > self.max_num_batched_tokens or not self.block_manager.can_allocate(seq):
                 break
-            if (not self.enable_hybrid_engine) and len(self.free_seq_ids) == 0:
-                break
+            if len(self.free_seq_ids) == 0:
+                if not self.enable_hybrid_engine:
+                    break
+                if (
+                    seq.num_blocks > self.block_manager.max_blocks_per_seq
+                    and self.strict_max_blocks
+                ):
+                    break
             if len(self.free_seq_ids) > 0:
                 self._allocate_seq_id(seq)
             self.block_manager.allocate(seq)
@@ -107,9 +113,12 @@ class Scheduler:
                 seq.last_token_entropy = entropies.pop(0)
             if seq.require_compress:
                 self.block_manager.deallocate_block_to_release(seq)
+                seq.block_table = seq.new_block_table
+                seq.new_block_table = None
                 seq.num_cached_tokens = (
                     len(seq.block_table) - 1
                 ) * self.block_manager.block_size + 1
+                seq.compressed = True
                 seq.require_compress = False
             if token_ids is not None:
                 token_id = token_ids.pop(0)
