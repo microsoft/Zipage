@@ -5,7 +5,6 @@ import numpy as np
 from zipvllm.engine.sequence import Sequence
 
 
-<<<<<<< HEAD
 class Block:
     def __init__(self, block_id: int):
         self.block_id = block_id
@@ -18,8 +17,6 @@ class Block:
         self.hash = hash
 
 
-=======
->>>>>>> 2aaa790 (init commit)
 class BlockManager:
 
     def __init__(self, num_blocks: int, block_size: int, max_blocks_per_seq: int = 4):
@@ -27,7 +24,6 @@ class BlockManager:
         self.free_block_ids: deque[int] = deque(range(num_blocks))
         self.used_block_ids: set[int] = set()
         self.max_blocks_per_seq = max_blocks_per_seq
-<<<<<<< HEAD
         self.hash_to_block: dict[int, Block] = dict()
         self.block_id_to_blcok: dict[int, Block] = dict()
 
@@ -38,8 +34,6 @@ class BlockManager:
             h.update(prefix.to_bytes(8, "little"))
         h.update(np.array(token_ids).tobytes())
         return h.intdigest()
-=======
->>>>>>> 2aaa790 (init commit)
 
     @property
     def block_occupancy(self):
@@ -61,7 +55,6 @@ class BlockManager:
 
     def allocate(self, seq: Sequence):
         assert not seq.block_table
-<<<<<<< HEAD
         h = -1
         cache_miss = False
         for i in range(seq.num_blocks):
@@ -90,16 +83,10 @@ class BlockManager:
                 self.block_id_to_blcok[block_id] = block
                 self.hash_to_block[h] = block
                 block.update(h, token_ids)
-=======
-        for _ in range(seq.num_blocks):
-            block_id = self.free_block_ids[0]
-            self._allocate_block(block_id)
->>>>>>> 2aaa790 (init commit)
             seq.block_table.append(block_id)
 
     def deallocate(self, seq: Sequence):
         for block_id in reversed(seq.block_table):
-<<<<<<< HEAD
             if block_id in self.block_id_to_blcok:
                 block = self.block_id_to_blcok[block_id]
                 block.ref_count -= 1
@@ -107,15 +94,11 @@ class BlockManager:
                     self._deallocate_block(block_id)
                     del self.block_id_to_blcok[block_id]
                     del self.hash_to_block[block.hash]
-=======
-            self._deallocate_block(block_id)
->>>>>>> 2aaa790 (init commit)
         seq.num_cached_tokens = 0
         seq.block_table.clear()
 
     def deallocate_block_to_release(self, seq: Sequence):
         for block_id in reversed(seq.block_to_release):
-<<<<<<< HEAD
             if block_id in self.block_id_to_blcok:
                 block = self.block_id_to_blcok[block_id]
                 block.ref_count -= 1
@@ -213,22 +196,3 @@ class BlockManager:
                 seq.block_table.append(block_id)
                 if not seq.compressed:
                     self.block_id_to_blcok[block_id] = Block(block_id)
-=======
-            self._deallocate_block(block_id)
-        seq.block_to_release.clear()
-
-    def can_append_or_compress(self, seq: Sequence):
-        block_table = seq.block_table
-        if len(seq) % self.block_size == 1:
-            if len(block_table) < self.max_blocks_per_seq:
-                if len(self.free_block_ids) > 0:
-                    block_id = self.free_block_ids[0]
-                    self._allocate_block(block_id)
-                    block_table.append(block_id)
-                else:
-                    # suspend
-                    return False
-            else:
-                seq.require_compress = True
-        return True
->>>>>>> 2aaa790 (init commit)

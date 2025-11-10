@@ -5,10 +5,7 @@ from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 import torch.multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor, as_completed
-<<<<<<< HEAD
 import threading
-=======
->>>>>>> 2aaa790 (init commit)
 
 from zipvllm.config import Config
 from zipvllm.sampling_params import SamplingParams
@@ -16,11 +13,8 @@ from zipvllm.engine.sequence import Sequence
 from zipvllm.engine.scheduler import Scheduler
 from zipvllm.engine.model_runner import ModelRunner
 
-<<<<<<< HEAD
 from collections import defaultdict
 
-=======
->>>>>>> 2aaa790 (init commit)
 
 class LLMEngine:
     def __init__(self, model, **kwargs):
@@ -44,7 +38,6 @@ class LLMEngine:
         config.pad = self.tokenizer.pad_token_id
         self.scheduler = Scheduler(config)
 
-<<<<<<< HEAD
         self.enable_log = kwargs.get("enable_log", False)
         self.logger = defaultdict(list)
         self.executor = ThreadPoolExecutor(max_workers=2)
@@ -56,24 +49,6 @@ class LLMEngine:
         # Add threading events for task completion
         self.compress_task_event = threading.Event()
         self.time_record = defaultdict(int)
-=======
-        enable_log = kwargs.get("enable_log", False)
-        if enable_log:
-            self.logger = {}
-            for key in [
-                "throughput",
-                "running_seqs",
-                "waiting_seqs",
-                "block_occupancy",
-                "time",
-            ]:
-                self.logger[key] = []
-        else:
-            self.logger = None
-        self.executor = ThreadPoolExecutor(max_workers=2)
-        self.compress_future = None
-        self.run_future = None
->>>>>>> 2aaa790 (init commit)
 
         atexit.register(self.exit)
 
@@ -91,22 +66,14 @@ class LLMEngine:
         self.scheduler.add(seq)
 
     def _compress_task(self, compress_seqs: list[Sequence]):
-<<<<<<< HEAD
         self.compress_task_event.set()
         self.model_runner.call("compress", compress_seqs)
         self.scheduler.postprocess(compress_seqs)
         self.compress_task_event.clear()
-=======
-        self.model_runner.call("compress", compress_seqs)
->>>>>>> 2aaa790 (init commit)
 
     def _run_task(self, run_seqs: list[Sequence], is_prefill: bool):
         token_ids, entropy = self.model_runner.call("run", run_seqs, is_prefill)
         self.scheduler.postprocess(run_seqs, token_ids, entropy)
-<<<<<<< HEAD
-=======
-        return token_ids, entropy
->>>>>>> 2aaa790 (init commit)
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
@@ -116,7 +83,6 @@ class LLMEngine:
                 if seq.require_compress:
                     compress_seqs.append(seq)
             if compress_seqs:
-<<<<<<< HEAD
                 start_time = perf_counter()
                 self.model_runner.call("compress", compress_seqs)
                 end_time = perf_counter()
@@ -132,11 +98,6 @@ class LLMEngine:
         else:
             self.time_record["decode"] = end_time - start_time
             self.time_record["decode_sum"] += end_time - start_time
-=======
-                self.model_runner.call("compress", compress_seqs)
-        token_ids, entropy = self.model_runner.call("run", seqs, is_prefill)
-        self.scheduler.postprocess(seqs, token_ids, entropy)
->>>>>>> 2aaa790 (init commit)
         outputs = [
             (seq.request_id, seq.completion_token_ids)
             for seq in seqs
@@ -146,11 +107,8 @@ class LLMEngine:
         return outputs, num_tokens
 
     def async_step(self):
-<<<<<<< HEAD
         compress_task_completed = not self.compress_task_event.is_set()
 
-=======
->>>>>>> 2aaa790 (init commit)
         seqs, is_prefill = self.scheduler.schedule()
         compress_seqs: list[Sequence] = []
         run_seqs: list[Sequence] = []
@@ -161,7 +119,6 @@ class LLMEngine:
             else:
                 run_seqs.append(seq)
 
-<<<<<<< HEAD
         if compress_task_completed:
             self.compress_future = (
                 self.executor.submit(self._compress_task, compress_seqs)
@@ -170,18 +127,12 @@ class LLMEngine:
             )
 
         start_time = perf_counter()
-=======
-        self.compress_future = self.executor.submit(
-            self._compress_task, compress_seqs if compress_seqs else None
-        )
->>>>>>> 2aaa790 (init commit)
         self.run_future = (
             self.executor.submit(self._run_task, run_seqs, is_prefill)
             if run_seqs
             else None
         )
 
-<<<<<<< HEAD
         if self.run_future is not None:
             self.run_future.result()
 
@@ -193,36 +144,19 @@ class LLMEngine:
             self.time_record["decode"] = end_time - start_time
             self.time_record["decode_sum"] += end_time - start_time
 
-=======
-        if self.compress_future is not None:
-            self.compress_future.result()
-        if self.run_future is not None:
-            self.run_future.result()
-
->>>>>>> 2aaa790 (init commit)
         outputs = [
             (seq.request_id, seq.completion_token_ids)
             for seq in run_seqs
             if seq.is_finished
         ]
-<<<<<<< HEAD
         num_tokens = sum(len(seq) for seq in run_seqs) if is_prefill else -len(run_seqs)
-=======
-        num_tokens = sum(len(seq) for seq in run_seqs) if is_prefill else -len(seqs)
->>>>>>> 2aaa790 (init commit)
         return outputs, num_tokens
 
     def is_finished(self):
         return self.scheduler.is_finished()
 
     def reset_logger(self):
-<<<<<<< HEAD
         self.logger.clear()
-=======
-        if self.logger:
-            for key in self.logger:
-                self.logger[key].clear()
->>>>>>> 2aaa790 (init commit)
 
     def _append_log_entry(
         self, time_from_start, running_seqs, waiting_seqs, decode_throughput
@@ -235,7 +169,6 @@ class LLMEngine:
         )
         self.logger["time"].append(time_from_start)
 
-<<<<<<< HEAD
         for key in self.time_record:
             if not key.endswith("_sum"):
                 self.logger[key].append(self.time_record[key])
@@ -250,14 +183,6 @@ class LLMEngine:
         should_log = ("time" not in self.logger) or time_from_start - self.logger[
             "time"
         ][-1] > 5
-=======
-    def log_step(self, time_from_start, running_seqs, waiting_seqs, decode_throughput):
-        if not self.logger:
-            return
-        should_log = (
-            not self.logger["time"] or time_from_start - self.logger["time"][-1] > 5
-        )
->>>>>>> 2aaa790 (init commit)
         if should_log:
             self._append_log_entry(
                 time_from_start, running_seqs, waiting_seqs, decode_throughput
@@ -279,7 +204,6 @@ class LLMEngine:
         prefill_throughput = decode_throughput = 0.0
         start_time = perf_counter()
         self.reset_logger()
-<<<<<<< HEAD
         dt = start_time
         while not self.is_finished():
             t = perf_counter()
@@ -287,21 +211,12 @@ class LLMEngine:
                 output, num_tokens = self.async_step()
             else:
                 output, num_tokens = self.step()
-=======
-        while not self.is_finished():
-            t = perf_counter()
-            output, num_tokens = self.step()
->>>>>>> 2aaa790 (init commit)
             current_time = perf_counter()
             if num_tokens > 0:
                 prefill_throughput = num_tokens / (current_time - t)
             else:
-<<<<<<< HEAD
                 decode_throughput = -num_tokens / (current_time - dt)
                 dt = current_time
-=======
-                decode_throughput = -num_tokens / (current_time - t)
->>>>>>> 2aaa790 (init commit)
             pbar.set_postfix(
                 {
                     "Prefill": f"{int(prefill_throughput)}tok/s",

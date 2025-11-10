@@ -23,16 +23,10 @@ class Sequence:
         self.last_token = token_ids[-1]
         self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = len(token_ids)
-<<<<<<< HEAD
         self.num_cached_tokens = 0
         self.block_table = []
         self.new_block_table = None
         self.block_to_release = None
-=======
-        # self.num_cached_tokens = 0
-        self.block_table = []
-        self.block_to_release = []
->>>>>>> 2aaa790 (init commit)
         self.require_compress = False
         self.compressed = False
         self.temperature = sampling_params.temperature
@@ -89,10 +83,7 @@ class Sequence:
         self.token_ids.append(token_id)
         self.last_token = token_id
         self.num_tokens += 1
-<<<<<<< HEAD
         self.num_cached_tokens += 1
-=======
->>>>>>> 2aaa790 (init commit)
 
     def __getstate__(self):
         return (
