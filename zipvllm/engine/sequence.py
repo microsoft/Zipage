@@ -1,7 +1,7 @@
 from copy import copy
 from enum import Enum, auto
 from itertools import count
-
+from typing import List, Optional
 from nanovllm.sampling_params import SamplingParams
 
 
@@ -25,8 +25,8 @@ class Sequence:
         self.num_prompt_tokens = len(token_ids)
         self.num_cached_tokens = 0
         self.block_table = []
-        self.new_block_table = None
-        self.block_to_release = None
+        self.new_block_table: Optional[List[int]] = None
+        self.block_to_release: Optional[List[int]] = None
         self.require_compress = False
         self.compressed = False
         self.temperature = sampling_params.temperature
