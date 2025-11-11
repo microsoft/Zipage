@@ -303,7 +303,6 @@ class ModelRunner:
             input_ids.extend(seq[seq.num_cached_tokens :])
             positions.extend(list(range(seq.num_cached_tokens, seqlen)))
             seqlen_q = seqlen - seq.num_cached_tokens
-            seq.num_cached_tokens = seqlen
             seqlen_k = seqlen
             query_slot_mapping.extend(
                 self.get_query_slot_mapping(
@@ -317,13 +316,14 @@ class ModelRunner:
 
             if not seq.block_table:  # warmup
                 continue
-            for i in range(seq.num_blocks):
+            for i in range(seq.num_cached_blocks, seq.num_blocks):
                 start = seq.block_table[i] * self.block_size
                 if i != seq.num_blocks - 1:
                     end = start + self.block_size
                 else:
                     end = start + seq.last_block_num_tokens
                 slot_mapping.extend(list(range(start, end)))
+            seq.num_cached_tokens = seqlen
         if cu_seqlens_k[-1] > cu_seqlens_q[-1]:  # prefix cache
             block_tables = self.prepare_block_tables(seqs)
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(
@@ -384,7 +384,7 @@ class ModelRunner:
         target_block_tables = torch.tensor(
             target_block_tables, dtype=torch.int32, pin_memory=True
         ).cuda(non_blocking=True)
-        
+
         for i in range(len(block_tables)):
             block_tables[i] = block_tables[i] + [-1] * (
                 max_len_block_table - len(block_tables[i])
@@ -465,33 +465,21 @@ class ModelRunner:
             start_time = perf_counter()
 
             start_time = perf_counter()
-            if self.keep_order:
-                compress_kv(k_cache, v_cache, keep_flag, block_tables)
-            else:
-                save_indices, load_indices = get_compress_slot_indices(
-                    keep_flag, block_tables, self.max_blocks_per_seq - 2
-                )
-                compress_kv_out_order(
-                    k_cache, v_cache, save_indices, load_indices, block_tables
-                )
+            compress_kv(k_cache, v_cache, keep_flag, block_tables, target_block_tables)
             end_time = perf_counter()
             self.time_record["compress_kv"] = end_time - start_time
             self.time_record["compress_kv_sum"] += end_time - start_time
-
-            start_time = perf_counter()
             if self.use_score_cache:
-                if self.keep_order:
-                    compress_score(self.score_cache[layer_id], keep_flag, block_tables)
-                else:
-                    compress_score_out_order(
-                        self.score_cache[layer_id],
-                        save_indices,
-                        load_indices,
-                        block_tables,
-                    )
-            end_time = perf_counter()
-            self.time_record["compress_score"] = end_time - start_time
-            self.time_record["compress_score_sum"] += end_time - start_time
+                start_time = perf_counter()
+                compress_score(
+                    self.score_cache[layer_id],
+                    keep_flag,
+                    block_tables,
+                    target_block_tables,
+                )
+                end_time = perf_counter()
+                self.time_record["compress_score"] = end_time - start_time
+                self.time_record["compress_score_sum"] += end_time - start_time
         return seqs
 
     def prepare_decode(self, seqs: list[Sequence]):

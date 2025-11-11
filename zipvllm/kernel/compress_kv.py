@@ -10,6 +10,7 @@ def compress_kv_kernel(
     value_ptr,
     flag_ptr,
     block_table_ptr,
+    target_block_table_ptr,
     stride_kb,
     stride_ks,
     stride_kh,
@@ -24,6 +25,8 @@ def compress_kv_kernel(
     stride_fs,
     stride_tb,
     stride_tn,
+    stride_ttb,
+    stride_ttn,
     BLOCK_D: tl.constexpr,
     MODEL_D: tl.constexpr,
     block_size: tl.constexpr,
@@ -38,7 +41,7 @@ def compress_kv_kernel(
     value_base = value_ptr + head_idx * stride_vh
     flag_base = flag_ptr + batch_idx * stride_fz + head_idx * stride_fh
 
-    block_id = tl.load(block_table_ptr + batch_idx * stride_tb)
+    block_id = tl.load(target_block_table_ptr + batch_idx * stride_ttb)
     key_save_ptr = key_base + block_id * stride_kb
     value_save_ptr = value_base + block_id * stride_vb
     pos = 0
@@ -80,9 +83,9 @@ def compress_kv_kernel(
                     pos += 1
                     if pos % block_size == 0:
                         next_block_id = tl.load(
-                            block_table_ptr
-                            + (pos // block_size) * stride_tn
-                            + batch_idx * stride_tb
+                            target_block_table_ptr
+                            + (pos // block_size) * stride_ttn
+                            + batch_idx * stride_ttb
                         )
                         key_save_ptr = key_base + next_block_id * stride_kb
                         value_save_ptr = value_base + next_block_id * stride_vb
@@ -96,6 +99,7 @@ def compress_kv(
     value: torch.Tensor,
     flag: torch.Tensor,
     block_table: torch.Tensor,
+    target_block_table: torch.Tensor,
 ):
     """
     compress key and value to k_cache and v_cache
@@ -105,6 +109,7 @@ def compress_kv(
         value: (num_kvcache_blocks, block_size, num_kv_heads, head_dim)
         flag: (batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
         block_table: (batch_size, max_num_blocks_per_seq)
+        target_block_table: (batch_size, max_num_blocks_per_seq-2)
     """
     BLOCK_D = 128
     _, block_size, num_kv_heads, head_dim = key.shape
@@ -115,10 +120,12 @@ def compress_kv(
         value,
         flag,
         block_table,
+        target_block_table,
         **_strides(key, "kb", "ks", "kh", "kd"),
         **_strides(value, "vb", "vs", "vh", "vd"),
         **_strides(flag, "fz", "fh", "fb", "fs"),
         **_strides(block_table, "tb", "tn"),
+        **_strides(target_block_table, "ttb", "ttn"),
         BLOCK_D=BLOCK_D,
         MODEL_D=head_dim,
         block_size=block_size,

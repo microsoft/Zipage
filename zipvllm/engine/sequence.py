@@ -69,6 +69,10 @@ class Sequence:
     def last_block_num_tokens(self):
         return self.num_tokens - (self.num_blocks - 1) * self.block_size
 
+    @property
+    def num_cached_blocks(self):
+        return self.num_cached_tokens // self.block_size
+        
     def block(self, i):
         assert 0 <= i < self.num_blocks
         return self.token_ids[i * self.block_size : (i + 1) * self.block_size]

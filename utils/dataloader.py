@@ -1,17 +1,21 @@
 from datasets import load_dataset
+
 INPUT_KEY = {
     "math-ai/aime24": "problem",
     "zwhe99/amc23": "question",
     "agentica-org/DeepScaleR-Preview-Dataset": "problem",
+    "THUDM/LongBench-v2": "question",
 }
 TARGET_KEY = {
     "math-ai/aime24": "solution",
     "zwhe99/amc23": "answer",
     "agentica-org/DeepScaleR-Preview-Dataset": "answer",
+    "THUDM/LongBench-v2": "answer",
 }
 SPLIT = {
     "math-ai/aime24": "test",
     "zwhe99/amc23": "test",
+    "THUDM/LongBench-v2": "train",
     "agentica-org/DeepScaleR-Preview-Dataset": "train",
 }
 
@@ -46,7 +50,28 @@ def load_data(
         dataset = dataset.select(range(0, split_len))
 
     for index, item in enumerate(dataset):
-        question = item[input_key]
+        if dataset_name_or_path == "THUDM/LongBench-v2":
+            context = item["context"]
+            question = item["question"]
+            choices = [
+                "A. " + item["choice_A"],
+                "B. " + item["choice_B"],
+                "C. " + item["choice_C"],
+                "D. " + item["choice_D"],
+            ]
+            question = (
+                context
+                + "\n"
+                + question
+                + "\n"
+                + "\n".join(choices)
+                + "\n"
+                + "Answer: "
+            )
+            if len(question)>64*1024:
+                continue
+        else:
+            question = item[input_key]
         if system_prompt is not None:
             prompt = [
                 {"role": "system", "content": system_prompt},
@@ -63,7 +88,10 @@ def load_data(
             prompts.append(prompt)
             if not isinstance(item[target_key], str):
                 item[target_key] = str(item[target_key])
-            data.append(
-                {"question": question, "answer": item[target_key], "index": index}
-            )
+            if not dataset_name_or_path == "THUDM/LongBench-v2":
+                data.append(
+                    {"question": question, "answer": item[target_key], "index": index}
+                )
+            else:
+                data.append({"answer": item[target_key], "index": index})
     return prompts, data

@@ -95,7 +95,7 @@ class BlockManager:
             block = self._find_block_add_ref(h)
             if block is None:
                 cache_miss = True
-            if block is not None and block.token_ids != token_ids:
+            elif block is not None and block.token_ids != token_ids:
                 # hash collision
                 cache_miss = True
                 self._remove_ref(block.block_id)
@@ -138,6 +138,8 @@ class BlockManager:
             )
             if len(seq.block_table) > self.max_blocks_per_seq:
                 seq.block_to_release = seq.block_table[self.max_blocks_per_seq - 2 : -2]
+            else:
+                seq.block_to_release = []
             seq.require_compress = True
         else:
             non_prefix_start = 0
