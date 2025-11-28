@@ -7,7 +7,7 @@ from nanovllm.layers.activation import SiluAndMul
 from zipvllm.layers.attention import Attention
 from nanovllm.layers.layernorm import RMSNorm
 from nanovllm.layers.linear import QKVParallelLinear, MergedColumnParallelLinear, RowParallelLinear
-from zipvllm.layers.rope import get_rope
+from zipvllm.layers.rotary_embedding import get_rope
 from zipvllm.layers.embed_head import VocabParallelEmbedding, ParallelLMHead
 
 

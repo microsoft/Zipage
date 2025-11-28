@@ -11,7 +11,7 @@ from nanovllm.layers.linear import (
     MergedColumnParallelLinear,
     RowParallelLinear,
 )
-from zipvllm.layers.rope import get_rope
+from zipvllm.layers.rotary_embedding import get_rope
 from zipvllm.layers.embed_head import VocabParallelEmbedding, ParallelLMHead
 
 
