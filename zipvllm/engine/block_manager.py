@@ -20,11 +20,18 @@ class Block:
 
 class BlockManager:
 
-    def __init__(self, num_blocks: int, block_size: int, max_blocks_per_seq: int = 4):
+    def __init__(
+        self,
+        num_blocks: int,
+        block_size: int,
+        max_blocks_per_seq: int = 4,
+        enable_prefix_cache: bool = False,
+    ):
         self.block_size = block_size
         self.free_block_ids: deque[int] = deque(range(num_blocks))
         self.used_block_ids: set[int] = set()
         self.max_blocks_per_seq = max_blocks_per_seq
+        self.enable_prefix_cache = enable_prefix_cache
         self.hash_to_block: dict[int, Block] = dict()
         self.block_id_to_blcok: dict[int, Block] = dict()
         self.ref_lock = threading.Lock()
@@ -89,7 +96,7 @@ class BlockManager:
             token_ids = seq.block(i)
             h = (
                 self.compute_hash(token_ids, h)
-                if len(token_ids) == self.block_size
+                if (len(token_ids) == self.block_size and self.enable_prefix_cache)
                 else -1
             )
             block = self._find_block_add_ref(h)

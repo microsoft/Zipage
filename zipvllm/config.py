@@ -18,20 +18,25 @@ class Config:
     kvcache_block_size: int = 256
     num_kvcache_blocks: int = -1
     # compress config
+    max_blocks_per_seq: int = 8
+    # query cache config
     query_selection_mode: str = "recent"
     query_cache_len: int = 16
-    max_blocks_per_seq: int = 8
-    use_score_cache: bool = False
+    # global score config
+    use_global_score: bool = False
     decay_factor: float = 0.6
-    similarity_factor: float = 0.4
+    # similarity score config
+    similarity_lambda: float = 0.4
     use_similarity: bool = False
-    use_attention_sink: bool = False
-    sink_len: int = 4
-    keep_order: bool = False
-    repetition_penalty: float = 1.0
+    # engine config
     enable_async_compress: bool = False
     enable_hybrid_engine: bool = False
     strict_max_blocks: bool = False
+    enable_prefix_cache: bool = False
+    # others
+    use_attention_sink: bool = False
+    sink_len: int = 4
+    repetition_penalty: float = 1.0
 
     def __post_init__(self):
         assert os.path.isdir(self.model)

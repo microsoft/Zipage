@@ -7,7 +7,7 @@ from zipvllm.kernel.key_norm import key_norm
 
 
 @triton.jit
-def raw_similarity_score_kernel(
+def light_similarity_score_kernel(
     key_cache_ptr,
     similarity_cos_ptr,
     key_norm_ptr,
@@ -171,7 +171,7 @@ def raw_similarity_score_kernel(
             tl.store(s_ptr, s.to(raw_dtype), boundary_check=(0,))
 
 
-def raw_similarity_score(
+def light_similarity_score(
     key_cache: torch.Tensor,
     block_table: torch.Tensor,
     last_block: torch.Tensor,
@@ -193,11 +193,10 @@ def raw_similarity_score(
     BLOCK_N = 64
 
     _, block_size, num_kv_heads, head_dim = key_cache.shape
-
-    block_table = torch.cat([block_table, last_block.unsqueeze(1)], dim=1)
     batch_size, max_num_blocks_per_seq = block_table.shape
 
     norm = key_norm(key_cache, block_table)
+    last_block_norm = key_norm(key_cache, last_block.unsqueeze(1))
 
     similarity_cos = torch.full(
         (batch_size, num_kv_heads, max_num_blocks_per_seq, block_size),
@@ -205,24 +204,18 @@ def raw_similarity_score(
         device=key_cache.device,
         dtype=key_cache.dtype,
     )
-    zero_out = torch.full(
-        (batch_size, num_kv_heads, max_num_blocks_per_seq, block_size),
-        False,
-        device=key_cache.device,
-        dtype=torch.bool,
-    )
     grid = (batch_size * num_kv_heads * max_num_blocks_per_seq,)
 
-    raw_similarity_score_kernel[grid](
+    light_similarity_score_kernel[grid](
         key_cache,
         similarity_cos,
         norm,
-        zero_out,
+        last_block_norm,
         block_table,
         **_strides(key_cache, "kb", "kl", "kh", "kd"),
         **_strides(similarity_cos, "sz", "sh", "sb", "sl"),
         **_strides(norm, "nz", "nh", "nb", "nl"),
-        **_strides(zero_out, "zz", "zh", "zb", "zl"),
+        **_strides(last_block_norm, "lnz", "lnh", "lnb", "lnl"),
         **_strides(block_table, "tz", "tb"),
         max_num_blocks_per_seq=max_num_blocks_per_seq,
         BLOCK_M=BLOCK_M,
@@ -232,8 +225,8 @@ def raw_similarity_score(
         head_dim=head_dim,
         threshold=threshold,
     )
-    del zero_out
     del norm
+    del last_block_norm
 
     similarity_cos = similarity_cos.view(batch_size, num_kv_heads, -1)
     seq_length = (block_table != -1).sum(dim=-1) * block_size
@@ -244,4 +237,4 @@ def raw_similarity_score(
     similarity_cos = similarity_cos.reshape(
         batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
     )
-    return similarity_cos[:, :, :-1]
+    return similarity_cos

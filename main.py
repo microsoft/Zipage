@@ -21,14 +21,18 @@ def main(args):
             port=args.port,
             enable_log=True,
             decay_factor=args.decay_factor,
-            use_score_cache=args.use_score_cache,
+            use_global_score=args.use_global_score,
             repetition_penalty=args.repetition_penalty,
             query_selection_mode=args.query_selection_mode,
             enable_async_compress=args.enable_async_compress,
             enable_hybrid_engine=args.enable_hybrid_engine,
             strict_max_blocks=args.strict_max_blocks,
+            enable_prefix_cache=args.enable_prefix_cache,
+            similarity_lambda=args.similarity_lambda,
+            use_similarity=args.use_similarity,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            max_num_batched_tokens=args.max_num_batched_tokens,
         )
-        sampling_params = SamplingParams(temperature=0.6, max_tokens=args.max_tokens)
     else:
         from nanovllm import SamplingParams
         from zipvllm import NanoLLM as LLM
@@ -37,9 +41,11 @@ def main(args):
             path,
             enforce_eager=True,
             tensor_parallel_size=args.tensor_parallel_size,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            max_num_batched_tokens=args.max_num_batched_tokens,
             enable_log=True,
         )
-        sampling_params = SamplingParams(temperature=0.6, max_tokens=args.max_tokens)
+    sampling_params = SamplingParams(temperature=0.6, max_tokens=args.max_tokens)
 
     prompts, data = load_data(
         args.dataset,
@@ -76,6 +82,8 @@ if __name__ == "__main__":
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument("--tensor_parallel_size", type=int, default=1)
+    parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
+    parser.add_argument("--max_num_batched_tokens", type=int, default=63840)
     parser.add_argument("--output_path", type=str, default=None)
     parser.add_argument("--port", type=int, default=2333)
     # sampling related
@@ -94,15 +102,15 @@ if __name__ == "__main__":
     parser.add_argument("--max_blocks_per_seq", type=int, default=8)
     parser.add_argument("--query_cache_len", type=int, default=16)
     parser.add_argument("--decay_factor", type=float, default=0.6)
-    parser.add_argument("--use_score_cache", action="store_true")
+    parser.add_argument("--use_global_score", action="store_true")
     parser.add_argument("--query_selection_mode", type=str, default="recent")
     parser.add_argument("--enable_async_compress", action="store_true")
     parser.add_argument("--enable_hybrid_engine", action="store_true")
     parser.add_argument("--strict_max_blocks", action="store_true")
     parser.add_argument("--use_attention_sink", action="store_true")
     parser.add_argument("--sink_len", type=int, default=4)
-    parser.add_argument("--keep_order", action="store_true")
-    parser.add_argument("--similarity_factor", type=float, default=0.4)
+    parser.add_argument("--similarity_lambda", type=float, default=0.4)
     parser.add_argument("--use_similarity", action="store_true")
+    parser.add_argument("--enable_prefix_cache", action="store_true")
     args = parser.parse_args()
     main(args)

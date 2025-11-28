@@ -65,14 +65,16 @@ def norm_kernel(
 def key_norm(
     key_cache: torch.Tensor,
     block_table: torch.Tensor,
+    norm_epsilon: float = 1e-6,
 ):
     """
     Calculate the norm of the key cache.
     Args:
         key_cache: (num_kvcache_blocks, block_size, num_kv_heads, head_dim)
         block_table: (batch_size, max_num_blocks_per_seq)
+        last_block: (batch_size)
     Returns:
-        key_norm: (batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
+        key_norm: (batch_size, num_kv_heads, max_num_blocks_per_seq , block_size)
     """
     BLOCK_S = 256
 
@@ -84,7 +86,7 @@ def key_norm(
         device=key_cache.device,
         dtype=key_cache.dtype,
     )
-    grid = (batch_size * num_kv_heads * max_num_blocks_per_seq,)
+    grid = (batch_size * num_kv_heads * (max_num_blocks_per_seq),)
 
     norm_kernel[grid](
         key_cache,
@@ -99,4 +101,5 @@ def key_norm(
         batch_size=batch_size,
         head_dim=head_dim,
     )
+    key_norm = torch.clamp(key_norm, min=norm_epsilon)
     return key_norm

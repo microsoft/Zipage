@@ -16,6 +16,7 @@ class Scheduler:
             config.num_kvcache_blocks,
             config.kvcache_block_size,
             config.max_blocks_per_seq,
+            config.enable_prefix_cache,
         )
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
@@ -43,6 +44,7 @@ class Scheduler:
             if seq.seq_id != -1:
                 self.used_seq_ids.remove(seq.seq_id)
                 self.free_seq_ids.append(seq.seq_id)
+                seq.seq_id = -1
 
     def schedule(self) -> tuple[list[Sequence], bool]:
         # prefill

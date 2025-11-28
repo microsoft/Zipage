@@ -10,18 +10,16 @@ from collections import defaultdict
 from zipvllm.layers.sampler import Sampler
 from zipvllm.config import Config
 from zipvllm.engine.sequence import Sequence
-from zipvllm.models.qwen3 import Qwen3ForCausalLM
+from zipvllm.models import AutoModelForCausalLM
 from zipvllm.utils.context import set_context, get_context, reset_context
 from zipvllm.utils.loader import load_model
 
 from zipvllm.kernel.compress_kv import compress_kv
-from zipvllm.kernel.compress_kv_out_order import compress_kv_out_order
 from zipvllm.kernel.compress_score import compress_score
-from zipvllm.kernel.compress_score_out_order import compress_score_out_order
 from zipvllm.kernel.attention_score import attention_score
 from zipvllm.kernel.raw_similarity_score import raw_similarity_score
 from zipvllm.kernel.global_score import global_score
-from zipvllm.kernel.utils import topk_mask, get_compress_slot_indices
+from zipvllm.kernel.utils import topk_mask
 
 
 class ModelRunner:
@@ -41,13 +39,12 @@ class ModelRunner:
         self.query_cache_len = config.query_cache_len
         self.query_selection_mode = config.query_selection_mode
         self.query_interval = self.block_size // self.query_cache_len
-        self.use_score_cache = config.use_score_cache
+        self.use_global_score = config.use_global_score
         self.decay_factor = config.decay_factor
         self.use_similarity = config.use_similarity
-        self.similarity_factor = config.similarity_factor
+        self.similarity_lambda = config.similarity_lambda
         self.use_attention_sink = config.use_attention_sink
         self.sink_len = config.sink_len
-        self.keep_order = config.keep_order
 
         assert self.sink_len < self.block_size * (self.max_blocks_per_seq - 2)
 
@@ -58,7 +55,7 @@ class ModelRunner:
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(hf_config.torch_dtype)
         torch.set_default_device("cuda")
-        self.model = Qwen3ForCausalLM(hf_config)
+        self.model = AutoModelForCausalLM(hf_config)
         load_model(self.model, config.model)
         self.sampler = Sampler(config.repetition_penalty)
         self.warmup_model()
@@ -364,6 +361,7 @@ class ModelRunner:
         # prepare
         max_len_block_table = 0
         block_tables = []
+        last_block = []
         seq_ids = []
         compressed = []
         target_block_tables = []
@@ -372,6 +370,7 @@ class ModelRunner:
             seq_ids.append(seq.seq_id)
             max_len_block_table = max(max_len_block_table, len(seq.block_table) - 1)
             block_tables.append(seq.block_table[:-2] + [-seq.block_table[-2] - 2])
+            last_block.append(seq.block_table[-1])
             compressed.append(seq.compressed)
             target_block_tables.append(seq.new_block_table[:-2])
 
@@ -393,6 +392,10 @@ class ModelRunner:
             block_tables, dtype=torch.int32, pin_memory=True
         ).cuda(non_blocking=True)
 
+        last_block = torch.tensor(
+            last_block, dtype=torch.int32, pin_memory=True
+        ).cuda(non_blocking=True)
+
         for layer_id in range(len(self.model.model.layers)):
             k_cache = self.kv_cache[0, layer_id]
             v_cache = self.kv_cache[1, layer_id]
@@ -405,7 +408,7 @@ class ModelRunner:
             self.time_record["attention_score_sum"] += end_time - start_time
 
             bsz, num_kv_heads, num_blocks, block_size = scores.shape
-            if self.use_score_cache:
+            if self.use_global_score:
                 start_time = perf_counter()
                 scores = scores.view(bsz, num_kv_heads, -1)
                 scores = scores.div_(scores.max(dim=-1, keepdim=True).values)
@@ -424,16 +427,15 @@ class ModelRunner:
             scores = scores.view(bsz, num_kv_heads, -1)
             if self.use_similarity:
                 start_time = perf_counter()
-                similarity = raw_similarity_score(k_cache, block_tables).view(
+                similarity = raw_similarity_score(k_cache, block_tables,last_block).view(
                     bsz, num_kv_heads, -1
                 )
-                if self.use_score_cache:
+                if self.use_global_score:
                     similarity = similarity.div_(
                         similarity.max(dim=-1, keepdim=True).values
                     )
-                scores = (
-                    scores * (1 - self.similarity_factor)
-                    + similarity * self.similarity_factor
+                scores = scores * self.similarity_lambda + similarity * (
+                    1 - self.similarity_lambda
                 )
                 end_time = perf_counter()
                 self.time_record["similarity_score"] = end_time - start_time
@@ -469,7 +471,7 @@ class ModelRunner:
             end_time = perf_counter()
             self.time_record["compress_kv"] = end_time - start_time
             self.time_record["compress_kv_sum"] += end_time - start_time
-            if self.use_score_cache:
+            if self.use_global_score:
                 start_time = perf_counter()
                 compress_score(
                     self.score_cache[layer_id],
@@ -478,8 +480,8 @@ class ModelRunner:
                     target_block_tables,
                 )
                 end_time = perf_counter()
-                self.time_record["compress_score"] = end_time - start_time
-                self.time_record["compress_score_sum"] += end_time - start_time
+                self.time_record["global_score"] += end_time - start_time
+                self.time_record["global_score_sum"] += end_time - start_time
         return seqs
 
     def prepare_decode(self, seqs: list[Sequence]):

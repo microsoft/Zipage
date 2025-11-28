@@ -81,6 +81,7 @@ def compress_score(
         score_cache,
         flag,
         block_table,
+        target_block_table,
         **_strides(score_cache, "sb", "sl", "sh"),
         **_strides(flag, "fz", "fh", "fb", "fl"),
         **_strides(block_table, "tb", "tn"),

@@ -14,7 +14,8 @@ def global_score_kernel(
     BLOCK_N: tl.constexpr,
     MAX_BLOCKS_PER_SEQ: tl.int32,
     BLOCK_SIZE: tl.constexpr,
-    decay_factor: tl.float32,
+    decay_factor: tl.float32,   
+    activate_method: str,
     stride_sb,
     stride_sh,
     stride_slb,
@@ -53,7 +54,10 @@ def global_score_kernel(
             reduced_vals = tl.load(reduced_ptr, mask=mask, other=0)
             if compressed:
                 cache_vals = tl.load(cache_ptr, mask=mask, other=0)
-                out = tl.maximum(reduced_vals, cache_vals * decay_factor)
+                if activate_method == "max":
+                    out = tl.maximum(reduced_vals, cache_vals * decay_factor)
+                elif activate_method == "sum":
+                    out = reduced_vals + cache_vals * decay_factor
                 out = out.to(reduced_vals.dtype)
             else:
                 out = reduced_vals
@@ -67,6 +71,7 @@ def global_score(
     block_table: torch.Tensor,
     compressed: torch.Tensor,
     decay_factor: float = 0.9,
+    activate_method: str = "max",
 ) -> torch.Tensor:
     """
     calculate max(reduced_scores, score_cache)
@@ -96,6 +101,7 @@ def global_score(
         max_num_blocks_per_seq,
         block_size,
         decay_factor,
+        activate_method,
         **_strides(reduced_scores, "sb", "sh", "slb", "sp"),
         **_strides(score_cache, "cb", "cp", "ch"),
         **_strides(block_table, "tb", "tn"),
