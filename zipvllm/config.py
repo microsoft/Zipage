@@ -26,8 +26,9 @@ class Config:
     use_global_score: bool = False
     decay_factor: float = 0.6
     # similarity score config
-    similarity_lambda: float = 0.4
+    similarity_lambda: float = 0.1
     use_similarity: bool = False
+    similarity_norm_method: str = "softmax"
     # engine config
     enable_async_compress: bool = False
     enable_hybrid_engine: bool = False

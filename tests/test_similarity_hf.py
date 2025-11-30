@@ -145,6 +145,8 @@ def cal_similarity(
     key_states: torch.Tensor,
     attention_mask: torch.Tensor,
     threshold=0.1,
+    temperature=1.0,
+    debug=False,
 ):
     """
     calculate cosine similarity score between key states
@@ -197,11 +199,17 @@ def cal_similarity(
     )
 
     seq_len = attention_mask.sum(dim=-1, keepdim=True).unsqueeze(-1)
-    similarity_cos.div_(seq_len)
+    if debug:
+        logits = similarity_cos.clone()
+    similarity_cos.div_(seq_len * temperature)
 
-    return torch.softmax(
+    similarity_cos = torch.softmax(
         similarity_cos - similarity_cos.max(dim=-1, keepdim=True).values, dim=-1
     )
+
+    if debug:
+        return logits, similarity_cos
+    return similarity_cos
 
 
 def test():

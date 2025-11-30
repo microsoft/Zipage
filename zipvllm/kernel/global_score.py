@@ -15,7 +15,7 @@ def global_score_kernel(
     MAX_BLOCKS_PER_SEQ: tl.int32,
     BLOCK_SIZE: tl.constexpr,
     decay_factor: tl.float32,   
-    activate_method: str,
+    activate_method: tl.constexpr,
     stride_sb,
     stride_sh,
     stride_slb,
@@ -71,7 +71,7 @@ def global_score(
     block_table: torch.Tensor,
     compressed: torch.Tensor,
     decay_factor: float = 0.9,
-    activate_method: str = "max",
+    activate_method: str = "sum",
 ) -> torch.Tensor:
     """
     calculate max(reduced_scores, score_cache)

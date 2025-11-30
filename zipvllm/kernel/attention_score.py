@@ -178,9 +178,12 @@ def attention_score(
     )
 
     qk_buffer = qk_buffer.reshape(batch_size, num_attention_heads, query_cache_len, -1)
+    dtype = qk_buffer.dtype
+    qk_buffer = qk_buffer.float()
     score = torch.softmax(
         qk_buffer - qk_buffer.max(dim=-1, keepdim=True).values, dim=-1
     )
+    score = score.to(dtype)
     del qk_buffer
     if IS_GQA:
         score = score.view(batch_size, num_kv_heads, G_q, query_cache_len, -1)

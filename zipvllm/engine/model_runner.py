@@ -45,6 +45,7 @@ class ModelRunner:
         self.similarity_lambda = config.similarity_lambda
         self.use_attention_sink = config.use_attention_sink
         self.sink_len = config.sink_len
+        self.similarity_norm_method = config.similarity_norm_method
 
         assert self.sink_len < self.block_size * (self.max_blocks_per_seq - 2)
 
@@ -392,9 +393,9 @@ class ModelRunner:
             block_tables, dtype=torch.int32, pin_memory=True
         ).cuda(non_blocking=True)
 
-        last_block = torch.tensor(
-            last_block, dtype=torch.int32, pin_memory=True
-        ).cuda(non_blocking=True)
+        last_block = torch.tensor(last_block, dtype=torch.int32, pin_memory=True).cuda(
+            non_blocking=True
+        )
 
         for layer_id in range(len(self.model.model.layers)):
             k_cache = self.kv_cache[0, layer_id]
@@ -427,13 +428,21 @@ class ModelRunner:
             scores = scores.view(bsz, num_kv_heads, -1)
             if self.use_similarity:
                 start_time = perf_counter()
-                similarity = raw_similarity_score(k_cache, block_tables,last_block).view(
-                    bsz, num_kv_heads, -1
-                )
-                if self.use_global_score:
+                similarity = raw_similarity_score(
+                    k_cache, block_tables, last_block, norm_method=self.similarity_norm_method
+                ).view(bsz, num_kv_heads, -1)
+                if (
+                    self.use_global_score
+                    and not self.similarity_norm_method == "minmax"
+                ):
                     similarity = similarity.div_(
                         similarity.max(dim=-1, keepdim=True).values
                     )
+                if (
+                    self.similarity_norm_method == "minmax"
+                    and not self.use_global_score
+                ):
+                    scores = scores.div_(scores.max(dim=-1, keepdim=True).values)
                 scores = scores * self.similarity_lambda + similarity * (
                     1 - self.similarity_lambda
                 )
@@ -452,6 +461,7 @@ class ModelRunner:
                 end_time = perf_counter()
                 self.time_record["attention_sink"] = end_time - start_time
                 self.time_record["attention_sink_sum"] += end_time - start_time
+
             scores = scores.view(bsz, num_kv_heads, num_blocks, block_size)
             start_time = perf_counter()
             mask = (block_tables == -1).unsqueeze(1).unsqueeze(-1)
@@ -464,7 +474,6 @@ class ModelRunner:
             end_time = perf_counter()
             self.time_record["topk_mask"] = end_time - start_time
             self.time_record["topk_mask_sum"] += end_time - start_time
-            start_time = perf_counter()
 
             start_time = perf_counter()
             compress_kv(k_cache, v_cache, keep_flag, block_tables, target_block_tables)
