@@ -13,18 +13,22 @@ def raw_similarity_score_kernel(
     key_norm_ptr,
     zero_out_ptr,
     block_table_ptr,
+    stride_ky,
     stride_kb,
     stride_kl,
     stride_kh,
     stride_kd,
+    stride_sy,
     stride_sz,
     stride_sh,
     stride_sb,
     stride_sl,
+    stride_ny,
     stride_nz,
     stride_nh,
     stride_nb,
     stride_nl,
+    stride_zy,
     stride_zz,
     stride_zh,
     stride_zb,
@@ -40,6 +44,7 @@ def raw_similarity_score_kernel(
     threshold: tl.float32,
 ):
     pid = tl.program_id(0)
+    layer_id = tl.program_id(1)
     batch_idx = pid % batch_size
     head_idx = pid // batch_size
 
@@ -52,7 +57,10 @@ def raw_similarity_score_kernel(
                 m_block_id = -m_block_id - 2
             for m_block_offset in range(block_size - BLOCK_M, -1, -BLOCK_M):
                 m_key_ptr = tl.make_block_ptr(
-                    base=key_cache_ptr + m_block_id * stride_kb + head_idx * stride_kh,
+                    base=key_cache_ptr
+                    + m_block_id * stride_kb
+                    + head_idx * stride_kh
+                    + layer_id * stride_ky,
                     shape=(block_size, head_dim),
                     strides=(stride_kl, stride_kd),
                     offsets=(m_block_offset, 0),
@@ -65,7 +73,8 @@ def raw_similarity_score_kernel(
                     base=key_norm_ptr
                     + batch_idx * stride_nz
                     + head_idx * stride_nh
-                    + m_block_idx * stride_nb,
+                    + m_block_idx * stride_nb
+                    + layer_id * stride_ny,
                     shape=(block_size, 1),
                     strides=(stride_nl, 1),
                     offsets=(m_block_offset, 0),
@@ -94,7 +103,8 @@ def raw_similarity_score_kernel(
                             n_key_ptr = tl.make_block_ptr(
                                 base=key_cache_ptr
                                 + n_block_id * stride_kb
-                                + head_idx * stride_kh,
+                                + head_idx * stride_kh
+                                + layer_id * stride_ky,
                                 shape=(head_dim, block_size),
                                 strides=(stride_kd, stride_kl),
                                 offsets=(0, n_block_offset),
@@ -106,7 +116,8 @@ def raw_similarity_score_kernel(
                                 base=key_norm_ptr
                                 + batch_idx * stride_nz
                                 + head_idx * stride_nh
-                                + n_block_idx * stride_nb,
+                                + n_block_idx * stride_nb
+                                + layer_id * stride_ny,
                                 shape=(1, block_size),
                                 strides=(1, stride_nl),
                                 offsets=(0, n_block_offset),
@@ -128,7 +139,8 @@ def raw_similarity_score_kernel(
                                 base=zero_out_ptr
                                 + batch_idx * stride_zz
                                 + head_idx * stride_zh
-                                + n_block_idx * stride_zb,
+                                + n_block_idx * stride_zb
+                                + layer_id * stride_zy,
                                 shape=(1, block_size),
                                 strides=(1, stride_zl),
                                 offsets=(0, n_block_offset),
@@ -163,7 +175,8 @@ def raw_similarity_score_kernel(
                     base=similarity_cos_ptr
                     + batch_idx * stride_sz
                     + head_idx * stride_sh
-                    + m_block_idx * stride_sb,
+                    + m_block_idx * stride_sb
+                    + layer_id * stride_sy,
                     shape=(block_size, 1),
                     strides=(stride_sl, 1),
                     offsets=(m_block_offset, 0),
@@ -176,16 +189,14 @@ def raw_similarity_score_kernel(
 def raw_similarity_score(
     key_cache: torch.Tensor,
     block_table: torch.Tensor,
-    last_block: torch.Tensor,
     threshold: float = 0.5,
     temperature: float = 1.0,
-    norm_method: str = "softmax",
-    debug: bool = False,
+    return_logits: bool = False,
 ):
     """
     Calculate cos similarity score between key cache.
     Args:
-        key_cache: (num_kvcache_blocks, block_size, num_kv_heads, head_dim)
+        key_cache: (num_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim)
         block_table: (batch_size, max_num_blocks_per_seq)
         last_block: (batch_size)
         retain_ratio: float
@@ -196,36 +207,25 @@ def raw_similarity_score(
     BLOCK_M = 16
     BLOCK_N = 64
 
-    _, block_size, num_kv_heads, head_dim = key_cache.shape
-
-    block_table = torch.cat([block_table, last_block.unsqueeze(1)], dim=1)
+    num_layers, _, block_size, num_kv_heads, head_dim = key_cache.shape
     batch_size, max_num_blocks_per_seq = block_table.shape
 
     norm = key_norm(key_cache, block_table)
 
-    if norm_method == "softmax":
-        similarity_cos = torch.full(
-            (batch_size, num_kv_heads, max_num_blocks_per_seq, block_size),
-            -float("inf"),
-            device=key_cache.device,
-            dtype=key_cache.dtype,
-        )
-    elif norm_method == "minmax":
-        similarity_cos = torch.zeros(
-            (batch_size, num_kv_heads, max_num_blocks_per_seq, block_size),
-            device=key_cache.device,
-            dtype=key_cache.dtype,
-        )
-    else:
-        raise ValueError(f"Invalid norm method: {norm_method}")
+    similarity_cos = torch.full(
+        (num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size),
+        -float("inf"),
+        device=key_cache.device,
+        dtype=key_cache.dtype,
+    )
 
     zero_out = torch.full(
-        (batch_size, num_kv_heads, max_num_blocks_per_seq, block_size),
+        (num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size),
         False,
         device=key_cache.device,
         dtype=torch.bool,
     )
-    grid = (batch_size * num_kv_heads,)
+    grid = (batch_size * num_kv_heads, num_layers)
 
     raw_similarity_score_kernel[grid](
         key_cache,
@@ -233,10 +233,10 @@ def raw_similarity_score(
         norm,
         zero_out,
         block_table,
-        **_strides(key_cache, "kb", "kl", "kh", "kd"),
-        **_strides(similarity_cos, "sz", "sh", "sb", "sl"),
-        **_strides(norm, "nz", "nh", "nb", "nl"),
-        **_strides(zero_out, "zz", "zh", "zb", "zl"),
+        **_strides(key_cache, "ky", "kb", "kl", "kh", "kd"),
+        **_strides(similarity_cos, "sy", "sz", "sh", "sb", "sl"),
+        **_strides(norm, "ny", "nz", "nh", "nb", "nl"),
+        **_strides(zero_out, "zy", "zz", "zh", "zb", "zl"),
         **_strides(block_table, "tz", "tb"),
         max_num_blocks_per_seq=max_num_blocks_per_seq,
         BLOCK_M=BLOCK_M,
@@ -249,33 +249,25 @@ def raw_similarity_score(
     del zero_out
     del norm
 
-    similarity_cos = similarity_cos.view(batch_size, num_kv_heads, -1)
-    if debug:
+    similarity_cos = similarity_cos.view(num_layers, batch_size, num_kv_heads, -1)
+    if return_logits:
         logits = similarity_cos.clone()
 
-    # softmax
-    if norm_method == "softmax":
-        seq_length = (block_table != -1).sum(dim=-1) * block_size
-        similarity_cos = similarity_cos.div_(
-            temperature * seq_length.unsqueeze(-1).unsqueeze(-1)
-        )
-        dtype = similarity_cos.dtype
-        similarity_cos = similarity_cos.float()
-        similarity_cos = (
-            similarity_cos - similarity_cos.max(dim=-1, keepdim=True).values
-        )
-        similarity_cos = similarity_cos.softmax(dim=-1)
-        similarity_cos = similarity_cos.to(dtype)
-    elif norm_method == "minmax":
-        max_value = similarity_cos.max(dim=-1, keepdim=True).values
-        min_value = similarity_cos.min(dim=-1, keepdim=True).values
-        similarity_cos = (similarity_cos - min_value) / (max_value - min_value)
+    seq_length = (block_table != -1).sum(dim=-1) * block_size
+    similarity_cos = similarity_cos.div_(
+        temperature * seq_length.unsqueeze(-1).unsqueeze(-1)
+    )
+    dtype = similarity_cos.dtype
+    similarity_cos = similarity_cos.float()
+    similarity_cos = similarity_cos - similarity_cos.max(dim=-1, keepdim=True).values
+    similarity_cos = similarity_cos.softmax(dim=-1)
+    similarity_cos = similarity_cos.to(dtype)
 
     similarity_cos = similarity_cos.reshape(
-        batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
+        num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
     )
 
-    if debug:
-        return logits, similarity_cos[:, :, :-1]
+    if return_logits:
+        return logits, similarity_cos
 
-    return similarity_cos[:, :, :-1]
+    return similarity_cos

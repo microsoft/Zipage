@@ -14,16 +14,14 @@ from zipvllm.kernel.raw_similarity_score import raw_similarity_score
 from tests.test_similarity_hf import cal_similarity
 
 
-def cal_similarity_ref(
-    key_cache, block_table, last_block, threshold=0.5, temperature=1.0
-):
-    block_table = torch.cat([block_table, last_block.unsqueeze(1)], dim=1)
-    num_kvcache_blocks, block_size, num_kv_heads, head_dim = key_cache.shape
+def cal_similarity_ref(key_cache, block_table, threshold=0.5, temperature=1.0):
+    num_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim = key_cache.shape
     batch_size, max_num_blocks_per_seq = block_table.shape
 
     # (batch_size, num_kv_heads, max_num_blocks_per_seq , block_size，head_dim)
 
     key_states = torch.zeros(
+        num_layers,
         batch_size,
         num_kv_heads,
         max_num_blocks_per_seq,
@@ -32,23 +30,24 @@ def cal_similarity_ref(
         device=key_cache.device,
         dtype=key_cache.dtype,
     )
-    for z in range(batch_size):
-        for h in range(num_kv_heads):
-            for m in range(max_num_blocks_per_seq):
-                if block_table[z, m] != -1:
-                    if block_table[z, m] < 0:
-                        block_id = -block_table[z, m] - 2
-                    else:
-                        block_id = block_table[z, m]
-                    key_states[z, h, m] = key_cache[block_id, :, h, :].view(
-                        block_size, head_dim
-                    )
-    key_states = key_states.view(batch_size, num_kv_heads, -1, head_dim)
+    for l in range(num_layers):
+        for z in range(batch_size):
+            for h in range(num_kv_heads):
+                for m in range(max_num_blocks_per_seq):
+                    if block_table[z, m] != -1:
+                        if block_table[z, m] < 0:
+                            block_id = -block_table[z, m] - 2
+                        else:
+                            block_id = block_table[z, m]
+                        key_states[l, z, h, m] = key_cache[l, block_id, :, h, :].view(
+                            block_size, head_dim
+                        )
+    key_states = key_states.view(num_layers, batch_size, num_kv_heads, -1, head_dim)
     key_norm = key_states.norm(dim=-1, keepdim=True)
     key_norm = torch.clamp(key_norm, min=1e-6)
     key_states = key_states / (key_norm)
 
-    # (batch_size, num_kv_heads, seq_len, seq_len)
+    # (num_layers, batch_size, num_kv_heads, seq_len, seq_len)
     similarity = key_states @ key_states.transpose(-2, -1)
     col_indices = torch.arange(
         0, block_size * max_num_blocks_per_seq, device=key_cache.device
@@ -74,9 +73,12 @@ def cal_similarity_ref(
     valid_mask = (
         valid_mask.unsqueeze(1)
         .unsqueeze(-1)
-        .expand(batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
+        .unsqueeze(0)
+        .expand(
+            num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
+        )
     )
-    valid_mask = valid_mask.reshape(batch_size, num_kv_heads, -1)
+    valid_mask = valid_mask.reshape(num_layers, batch_size, num_kv_heads, -1)
     similarity.masked_fill_(
         valid_mask,
         float("-inf"),
@@ -87,16 +89,15 @@ def cal_similarity_ref(
     similarity = similarity - similarity.max(dim=-1, keepdim=True).values
     similarity = similarity.softmax(dim=-1)
     similarity = similarity.reshape(
-        batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
+        num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
     )
-    return similarity[:, :, :-1], logits
+    return similarity, logits
 
 
 def cal_similarity_hf(
-    key_cache, block_table, last_block, threshold=0.5, temperature=1.0
+    key_cache, block_table,  threshold=0.5, temperature=1.0
 ):
-    block_table = torch.cat([block_table, last_block.unsqueeze(1)], dim=1)
-    num_kvcache_blocks, block_size, num_kv_heads, head_dim = key_cache.shape
+    num_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim = key_cache.shape
     batch_size, max_num_blocks_per_seq = block_table.shape
 
     padd_block = (block_table == -1).sum(dim=-1)
@@ -104,6 +105,7 @@ def cal_similarity_hf(
     # (batch_size, num_kv_heads, max_num_blocks_per_seq , block_size，head_dim)
 
     key_states = torch.zeros(
+        num_layers,
         batch_size,
         num_kv_heads,
         max_num_blocks_per_seq,
@@ -121,41 +123,75 @@ def cal_similarity_hf(
                 [0] * (padd_block[z].item() * block_size)
                 + [1] * ((max_num_blocks_per_seq - padd_block[z].item()) * block_size)
             )
-    attention_mask = torch.tensor(attention_mask, device=key_cache.device, dtype=torch.int64)
-    for z in range(batch_size):
-        for h in range(num_kv_heads):
-            pos = padd_block[z].item()
-            for m in range(max_num_blocks_per_seq):
-                if block_table[z, m] != -1:
-                    if block_table[z, m] < 0:
-                        block_id = -block_table[z, m] - 2
-                    else:
-                        block_id = block_table[z, m]
-                    key_states[z, h, pos] = key_cache[block_id, :, h, :].view(
-                        block_size, head_dim
-                    )
-                    pos += 1
+    attention_mask = torch.tensor(
+        attention_mask, device=key_cache.device, dtype=torch.int64
+    )
+    for l in range(num_layers):
+        for z in range(batch_size):
+            for h in range(num_kv_heads):
+                pos = padd_block[z].item()
+                for m in range(max_num_blocks_per_seq):
+                    if block_table[z, m] != -1:
+                        if block_table[z, m] < 0:
+                            block_id = -block_table[z, m] - 2
+                        else:
+                            block_id = block_table[z, m]
+                        key_states[l, z, h, pos] = key_cache[l, block_id, :, h, :].view(
+                            block_size, head_dim
+                        )
+                        pos += 1
     # (batch_size, num_heads, seq_len)
-    key_states=key_states.view(batch_size, num_kv_heads, -1, head_dim)
-    logits, similarity_cos = cal_similarity(key_states, attention_mask, threshold, temperature,debug=True)
-    logits=logits.reshape(batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
-    similarity_cos=similarity_cos.reshape(batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
-    mapped_logits=logits.clone()
-    mapped_similarity_cos=similarity_cos.clone()
-    for z in range(batch_size):
-        for h in range(num_kv_heads):
-            if padd_block[z].item() == 0:
-                continue
-            pos=padd_block[z].item()
-            for m in range(max_num_blocks_per_seq):
-                if block_table[z, m] != -1:
-                    mapped_logits[z, h, m, :] = logits[z, h, pos, :]
-                    mapped_similarity_cos[z, h, m, :] = similarity_cos[z, h, pos, :]
-                    pos += 1
-                else:
-                    mapped_logits[z, h, m, :] = 0
-                    mapped_similarity_cos[z, h, m, :] = 0
-    mapped_logits=mapped_logits.view(batch_size, num_kv_heads, -1)
+    key_states = key_states.view(num_layers, batch_size, num_kv_heads, -1, head_dim)
+
+    logits = torch.zeros(
+        num_layers,
+        batch_size,
+        num_kv_heads,
+        max_num_blocks_per_seq,
+        block_size,
+        device=key_cache.device,
+        dtype=key_cache.dtype,
+    )
+    similarity_cos = torch.zeros(
+        num_layers,
+        batch_size,
+        num_kv_heads,
+        max_num_blocks_per_seq,
+        block_size,
+        device=key_cache.device,
+        dtype=key_cache.dtype,
+    )
+    for l in range(num_layers):
+        logits_, similarity_cos_ = cal_similarity(
+            key_states[l], attention_mask, threshold, temperature, debug=True
+        )
+        logits[l] = logits_.reshape(
+            batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
+        )
+        similarity_cos[l] = similarity_cos_.reshape(
+            batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
+        )
+    mapped_logits = logits.clone()
+    mapped_similarity_cos = similarity_cos.clone().reshape(
+        num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
+    )
+    for l in range(num_layers):
+        for z in range(batch_size):
+            for h in range(num_kv_heads):
+                if padd_block[z].item() == 0:
+                    continue
+                pos = padd_block[z].item()
+                for m in range(max_num_blocks_per_seq):
+                    if block_table[z, m] != -1:
+                        mapped_logits[l, z, h, m, :] = logits[l, z, h, pos, :]
+                        mapped_similarity_cos[l, z, h, m, :] = similarity_cos[
+                            l, z, h, pos, :
+                        ]
+                        pos += 1
+                    else:
+                        mapped_logits[l, z, h, m, :] = 0
+                        mapped_similarity_cos[l, z, h, m, :] = 0
+    mapped_logits = mapped_logits.view(num_layers, batch_size, num_kv_heads, -1)
 
     return mapped_logits, mapped_similarity_cos
 
@@ -167,7 +203,9 @@ def test():
     head_dim = 128
     temperature = 0.2
     threshold = 0.5
+    num_layers = 2
     key_cache = torch.randn(
+        num_layers,
         num_kvcache_blocks,
         block_size,
         num_kv_heads,
@@ -178,20 +216,19 @@ def test():
     block_table = torch.tensor(
         [[0, 1, -4], [4, -7, -1]], device="cuda", dtype=torch.int32
     )
-    last_block = torch.tensor([3, 6], device="cuda", dtype=torch.int32)
     logits, similarity_score = raw_similarity_score(
-        key_cache, block_table, last_block, threshold, temperature, debug=True
+        key_cache, block_table, threshold, temperature, return_logits=True
     )
 
     similarity_score_ref, logits_ref = cal_similarity_ref(
-        key_cache, block_table, last_block, threshold, temperature
+        key_cache, block_table, threshold, temperature
     )
     logits_hf, similarity_score_hf = cal_similarity_hf(
-        key_cache, block_table, last_block, threshold, temperature
+        key_cache, block_table, threshold, temperature
     )
     time_start = time.time()
     logits, similarity_score = raw_similarity_score(
-        key_cache, block_table, last_block, threshold, temperature, debug=True
+        key_cache, block_table, threshold, temperature, return_logits=True
     )
     time_end = time.time()
 

@@ -15,7 +15,7 @@ class Scheduler:
         self.block_manager = BlockManager(
             config.num_kvcache_blocks,
             config.kvcache_block_size,
-            config.max_blocks_per_seq,
+            config.max_cache_blocks_per_seq + 1,
             config.enable_prefix_cache,
         )
         self.waiting: deque[Sequence] = deque()

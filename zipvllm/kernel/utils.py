@@ -24,11 +24,11 @@ def topk_mask(scores: torch.Tensor, k: int):
     top-k is True, others are False
 
     Arguments:
-        scores: Shape (batch_size, num_kv_heads, seq_len)
+        scores: Shape (num_layers, batch_size, num_kv_heads, seq_len)
         k: int
         dim: int
     Returns:
-        mask: Shape (batch_size, num_kv_heads, seq_len)
+        mask: Shape (num_layers, batch_size, num_kv_heads, seq_len)
     """
     topk_indices = torch.topk(scores, k, dim=-1)[1]
     mask = torch.zeros_like(scores, dtype=torch.bool)

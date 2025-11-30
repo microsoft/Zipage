@@ -138,17 +138,14 @@ class BlockManager:
 
     def may_compress(self, seq: Sequence) -> bool:
         if seq.compressed:
-            seq.new_block_table = (
-                seq.block_table[: self.max_blocks_per_seq - 2]
-                + [seq.block_table[-1]]
-                + [seq.block_table[-2]]
-            )
+            seq.new_block_table = seq.block_table[: self.max_blocks_per_seq]
             if len(seq.block_table) > self.max_blocks_per_seq:
-                seq.block_to_release = seq.block_table[self.max_blocks_per_seq - 2 : -2]
+                seq.block_to_release = seq.block_table[self.max_blocks_per_seq :]
             else:
                 seq.block_to_release = []
             seq.require_compress = True
         else:
+            # preserve share prefix
             non_prefix_start = 0
             for block_id in seq.block_table:
                 if (
@@ -160,34 +157,24 @@ class BlockManager:
                     break
             non_prefix_blocks = len(seq.block_table) - non_prefix_start
             assert non_prefix_blocks >= 1
-            num_new_blocks = min(non_prefix_start, self.max_blocks_per_seq - 2)
-            if num_new_blocks + (non_prefix_blocks == 1) >= len(self.free_block_ids):
+            num_new_blocks = min(non_prefix_start, self.max_blocks_per_seq - 1)
+            if num_new_blocks > len(self.free_block_ids):
                 return False
             # new block table after compression
             seq.new_block_table = []
             for _ in range(num_new_blocks):
                 block_id = self._allocate_block()
                 seq.new_block_table.append(block_id)
-            if num_new_blocks < self.max_blocks_per_seq - 2:
-                seq.new_block_table += seq.block_table[
-                    non_prefix_start : self.max_blocks_per_seq - 2
-                ]
-            seq.new_block_table.append(seq.block_table[-1])
-            if non_prefix_blocks == 1:
-                block_id = self._allocate_block()
-                seq.new_block_table.append(block_id)
-            else:
-                seq.new_block_table.append(seq.block_table[-2])
+            seq.new_block_table += seq.block_table[
+                non_prefix_start : non_prefix_start
+                + self.max_blocks_per_seq
+                - num_new_blocks
+            ]
             # block to release after compression
             seq.block_to_release = seq.block_table[:non_prefix_start]
-            if non_prefix_blocks == 1:
-                seq.block_to_release += seq.block_table[
-                    max(non_prefix_start, self.max_blocks_per_seq - 2) : -1
-                ]
-            else:
-                seq.block_to_release += seq.block_table[
-                    max(non_prefix_start, self.max_blocks_per_seq - 2) : -2
-                ]
+            seq.block_to_release += seq.block_table[
+                non_prefix_start + self.max_blocks_per_seq - num_new_blocks :
+            ]
             seq.require_compress = True
         return True
 
@@ -202,7 +189,6 @@ class BlockManager:
             if strict:
                 if len(block_table) < self.max_blocks_per_seq:
                     if not len(self.free_block_ids) > 0:
-                        # suspend
                         return False
                 else:
                     return self.may_compress(seq)

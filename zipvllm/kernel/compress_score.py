@@ -10,9 +10,11 @@ def compress_score_kernel(
     flag_ptr,
     block_table_ptr,
     target_block_table_ptr,
+    stride_sy,
     stride_sb,
     stride_sl,
     stride_sh,
+    stride_fy,
     stride_fz,
     stride_fh,
     stride_fb,
@@ -26,11 +28,12 @@ def compress_score_kernel(
     block_size: tl.constexpr,
 ):
     pid = tl.program_id(0)
+    layer_id = tl.program_id(1)
     batch_idx = pid % batch_size
     head_idx = pid // batch_size
 
-    score_base = score_cache_ptr + head_idx * stride_sh
-    flag_base = flag_ptr + batch_idx * stride_fz + head_idx * stride_fh
+    score_base = score_cache_ptr + head_idx * stride_sh+layer_id * stride_sy
+    flag_base = flag_ptr + batch_idx * stride_fz + head_idx * stride_fh + layer_id * stride_fy
     block_id = tl.load(target_block_table_ptr + batch_idx * stride_ttb)
     score_save_ptr = score_base + block_id * stride_sb
     pos = 0
@@ -70,20 +73,22 @@ def compress_score(
     compress score in score_cache
 
     Arguments:
-        score_cache: (num_kvcache_blocks, block_size, num_kv_heads)
-        flag: (batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
+        score_cache: (num_layers, num_kvcache_blocks, block_size, num_kv_heads)
+        flag: (num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
         block_table: (batch_size, max_num_blocks_per_seq)
         target_block_table: (batch_size, max_num_blocks_per_seq-2)
     """
-    batch_size, num_kv_heads, max_num_blocks_per_seq, block_size = flag.shape
-    grid = (batch_size * num_kv_heads,)
+    num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size = (
+        flag.shape
+    )
+    grid = (batch_size * num_kv_heads, num_layers)
     compress_score_kernel[grid](
         score_cache,
         flag,
         block_table,
         target_block_table,
-        **_strides(score_cache, "sb", "sl", "sh"),
-        **_strides(flag, "fz", "fh", "fb", "fl"),
+        **_strides(score_cache, "sy", "sb", "sl", "sh"),
+        **_strides(flag, "fy", "fz", "fh", "fb", "fl"),
         **_strides(block_table, "tb", "tn"),
         **_strides(target_block_table, "ttb", "ttn"),
         batch_size=batch_size,

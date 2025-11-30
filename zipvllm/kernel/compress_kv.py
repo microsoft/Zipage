@@ -11,14 +11,17 @@ def compress_kv_kernel(
     flag_ptr,
     block_table_ptr,
     target_block_table_ptr,
+    stride_ky,
     stride_kb,
     stride_ks,
     stride_kh,
     stride_kd,
+    stride_vy,
     stride_vb,
     stride_vs,
     stride_vh,
     stride_vd,
+    stride_fy,
     stride_fz,
     stride_fh,
     stride_fb,
@@ -34,12 +37,15 @@ def compress_kv_kernel(
     max_num_blocks_per_seq: tl.int32,
 ):
     pid = tl.program_id(0)
+    layer_id = tl.program_id(1)
     batch_idx = pid % batch_size
     head_idx = pid // batch_size
 
-    key_base = key_ptr + head_idx * stride_kh
-    value_base = value_ptr + head_idx * stride_vh
-    flag_base = flag_ptr + batch_idx * stride_fz + head_idx * stride_fh
+    key_base = key_ptr + head_idx * stride_kh + layer_id * stride_ky
+    value_base = value_ptr + head_idx * stride_vh + layer_id * stride_vy
+    flag_base = (
+        flag_ptr + batch_idx * stride_fz + head_idx * stride_fh + layer_id * stride_fy
+    )
 
     block_id = tl.load(target_block_table_ptr + batch_idx * stride_ttb)
     key_save_ptr = key_base + block_id * stride_kb
@@ -105,25 +111,25 @@ def compress_kv(
     compress key and value to k_cache and v_cache
 
     Arguments:
-        key: (num_kvcache_blocks, block_size, num_kv_heads, head_dim)
-        value: (num_kvcache_blocks, block_size, num_kv_heads, head_dim)
-        flag: (batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
+        key: (num_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim)
+        value: (num_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim)
+        flag: (num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
         block_table: (batch_size, max_num_blocks_per_seq)
         target_block_table: (batch_size, max_num_blocks_per_seq-2)
     """
     BLOCK_D = 128
-    _, block_size, num_kv_heads, head_dim = key.shape
-    batch_size, _, max_num_blocks_per_seq, _ = flag.shape
-    grid = (batch_size * num_kv_heads,)
+    num_layers, _, block_size, num_kv_heads, head_dim = key.shape
+    _, batch_size, _, max_num_blocks_per_seq, _ = flag.shape
+    grid = (batch_size * num_kv_heads, num_layers)
     compress_kv_kernel[grid](
         key,
         value,
         flag,
         block_table,
         target_block_table,
-        **_strides(key, "kb", "ks", "kh", "kd"),
-        **_strides(value, "vb", "vs", "vh", "vd"),
-        **_strides(flag, "fz", "fh", "fb", "fs"),
+        **_strides(key, "ky", "kb", "ks", "kh", "kd"),
+        **_strides(value, "vy", "vb", "vs", "vh", "vd"),
+        **_strides(flag, "fy", "fz", "fh", "fb", "fs"),
         **_strides(block_table, "tb", "tn"),
         **_strides(target_block_table, "ttb", "ttn"),
         BLOCK_D=BLOCK_D,

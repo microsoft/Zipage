@@ -11,14 +11,17 @@ def attention_score_kernel(
     qk_buffer_ptr,
     seq_idx_ptr,
     block_table_ptr,
+    stride_qy,
     stride_qs,
     stride_qc,
     stride_qh,
     stride_qd,
+    stride_ky,
     stride_kb,
     stride_kc,
     stride_kh,
     stride_kd,
+    stride_sy,
     stride_sb,
     stride_sh,
     stride_sc,
@@ -39,6 +42,7 @@ def attention_score_kernel(
     max_num_blocks_per_seq: tl.int32,
 ):
     pid = tl.program_id(0)
+    layer_id = tl.program_id(1)
     num_q_blocks = tl.cdiv(QUERY_CACHE_LEN, BLOCK_M)
     bsz = pid // (H_q * num_q_blocks)
     rem = pid % (H_q * num_q_blocks)
@@ -53,7 +57,12 @@ def attention_score_kernel(
     else:
         k_head_idx = head_id
 
-    Q_base = query_cache_ptr + seq_id * stride_qs + head_id * stride_qh
+    Q_base = (
+        query_cache_ptr
+        + seq_id * stride_qs
+        + head_id * stride_qh
+        + layer_id * stride_qy
+    )
 
     Q_block_ptr = tl.make_block_ptr(
         base=Q_base,
@@ -70,13 +79,22 @@ def attention_score_kernel(
         if not block_id == -1:
             if block_id < 0:
                 block_id = -block_id - 2
+                last_block = True
+            else:
+                last_block = False
             qk_base = (
                 qk_buffer_ptr
                 + bsz * stride_sb
                 + head_id * stride_sh
                 + block_idx * stride_sm
+                + layer_id * stride_sy
             )
-            k_base = k_cache_ptr + block_id * stride_kb + k_head_idx * stride_kh
+            k_base = (
+                k_cache_ptr
+                + block_id * stride_kb
+                + k_head_idx * stride_kh
+                + layer_id * stride_ky
+            )
             for K_OFFSET in range(0, BLOCK_SIZE, BLOCK_N):
                 K_block_ptr = tl.make_block_ptr(
                     base=k_base,
@@ -89,6 +107,15 @@ def attention_score_kernel(
                 k = tl.load(K_block_ptr, boundary_check=(0, 1))
                 qk = tl.dot(q, k)
                 qk = qk * softmax_scale
+                if last_block:
+                    col_index = (K_OFFSET + tl.arange(0, BLOCK_N))[None, :]
+                    raw_index = tl.arange(
+                        BLOCK_SIZE - QUERY_CACHE_LEN ,
+                        BLOCK_SIZE - QUERY_CACHE_LEN +  BLOCK_M,
+                    )[:, None]
+                    raw_index = raw_index + q_id * BLOCK_M
+                    mask = col_index > raw_index
+                    qk = tl.where(mask, -float("inf"), qk)
                 qk_block_ptr = tl.make_block_ptr(
                     base=qk_base,
                     shape=(QUERY_CACHE_LEN, BLOCK_SIZE),
@@ -108,28 +135,28 @@ def attention_score(
     block_table: torch.Tensor,
     softmax_scale=None,
     reduced="mean",
-    gamma=0.99,
+    return_logits=False,
 ) -> torch.Tensor:
     """
     calculate attention scores, each sequence each layer's attention score is num_attention_heads * query_cache_len * cache_seqlens
     reduce the attention scores to num_kv_heads * query_cache_len * cache_seqlens by max reduce along query head
     then reduce the attention scores to num_attention_heads * cache_seqlens by mean reduce
     Arguments:
-        k_cache: Shape (num_kvcache_blocks, block_size, num_kv_heads, head_dim) cached key
-        query_cache: Shape (max_num_seqs, query_cache_len, num_attention_heads, head_dim) cached query
+        k_cache: Shape (num_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim) cached key
+        query_cache: Shape (num_layers, max_num_seqs, query_cache_len, num_attention_heads, head_dim) cached query
         seq_idx: Shape (batch_size,) query cache index for each sequence
         block_table: Shape (batch_size, max_num_blocks_per_seq) each sequence KV cache actual position, -1 is padding
         softmax_scale: float
     Returns:
-        reduced_scores: Shape (batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
+        reduced_scores: Shape (num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
     """
     # kernel config
     BLOCK_M = 16
     BLOCK_N = 64
 
     # get dims
-    num_kvcache_blocks, block_size, num_kv_heads, head_dim = k_cache.shape
-    _, query_cache_len, num_attention_heads, _ = query_cache.shape
+    num_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim = k_cache.shape
+    _, _, query_cache_len, num_attention_heads, _ = query_cache.shape
     batch_size, max_num_blocks_per_seq = block_table.shape
     BLOCK_HEAD_DIM = get_padded_headsize(head_dim)
     if softmax_scale is None:
@@ -139,6 +166,7 @@ def attention_score(
 
     qk_buffer = torch.full(
         (
+            num_layers,
             batch_size,
             num_attention_heads,
             query_cache_len,
@@ -152,6 +180,7 @@ def attention_score(
 
     grid_qk = (
         triton.cdiv(query_cache_len, BLOCK_M) * batch_size * num_attention_heads,
+        num_layers,
     )
 
     attention_score_kernel[grid_qk](
@@ -160,9 +189,9 @@ def attention_score(
         qk_buffer_ptr=qk_buffer,
         seq_idx_ptr=seq_idx,
         block_table_ptr=block_table,
-        **_strides(query_cache, "qs", "qc", "qh", "qd"),
-        **_strides(k_cache, "kb", "kc", "kh", "kd"),
-        **_strides(qk_buffer, "sb", "sh", "sc", "sm", "sd"),
+        **_strides(query_cache, "qy", "qs", "qc", "qh", "qd"),
+        **_strides(k_cache, "ky", "kb", "kc", "kh", "kd"),
+        **_strides(qk_buffer, "sy", "sb", "sh", "sc", "sm", "sd"),
         **_strides(block_table, "tb", "tn"),
         H_q=num_attention_heads,
         H_kv=num_kv_heads,
@@ -177,7 +206,11 @@ def attention_score(
         max_num_blocks_per_seq=max_num_blocks_per_seq,
     )
 
-    qk_buffer = qk_buffer.reshape(batch_size, num_attention_heads, query_cache_len, -1)
+    qk_buffer = qk_buffer.reshape(
+        num_layers, batch_size, num_attention_heads, query_cache_len, -1
+    )
+    if return_logits:
+        logits = qk_buffer.clone()
     dtype = qk_buffer.dtype
     qk_buffer = qk_buffer.float()
     score = torch.softmax(
@@ -186,39 +219,28 @@ def attention_score(
     score = score.to(dtype)
     del qk_buffer
     if IS_GQA:
-        score = score.view(batch_size, num_kv_heads, G_q, query_cache_len, -1)
-        reduced_scores = torch.max(score, dim=2).values
+        score = score.view(
+            num_layers, batch_size, num_kv_heads, G_q, query_cache_len, -1
+        )
+        reduced_scores = torch.max(score, dim=3).values
     else:
         reduced_scores = score
     del score
     reduced_scores = reduced_scores.reshape(
-        batch_size, num_kv_heads, query_cache_len, max_num_blocks_per_seq, block_size
+        num_layers,
+        batch_size,
+        num_kv_heads,
+        query_cache_len,
+        max_num_blocks_per_seq,
+        block_size,
     )
 
     if reduced == "mean":
-        reduced_scores = reduced_scores.mean(dim=2)
+        reduced_scores = reduced_scores.mean(dim=3)
     elif reduced == "max":
-        reduced_scores = reduced_scores.max(dim=2).values
-    elif reduced == "weighted_mean":
-        weights = [gamma]
-        for i in range(query_cache_len - 1):
-            weights.append(weights[-1] * gamma)
-        weights = weights[::-1]
-        weights = torch.tensor(
-            weights, device=reduced_scores.device, dtype=reduced_scores.dtype
-        )
-        reduced_scores = (reduced_scores * weights.view(1, 1, -1, 1, 1)).mean(dim=2)
-    elif reduced == "weighted_max":
-        weights = [gamma]
-        for i in range(query_cache_len - 1):
-            weights.append(weights[-1] * gamma)
-        weights = weights[::-1]
-        weights = torch.tensor(
-            weights, device=reduced_scores.device, dtype=reduced_scores.dtype
-        )
-        reduced_scores = (
-            (reduced_scores * weights.view(1, 1, -1, 1, 1)).max(dim=2).values
-        )
+        reduced_scores = reduced_scores.max(dim=3).values
     else:
         raise ValueError(f"Invalid reduction method: {reduced}")
+    if return_logits:
+        return reduced_scores, logits
     return reduced_scores

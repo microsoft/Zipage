@@ -14,12 +14,14 @@ def global_score_kernel(
     BLOCK_N: tl.constexpr,
     MAX_BLOCKS_PER_SEQ: tl.int32,
     BLOCK_SIZE: tl.constexpr,
-    decay_factor: tl.float32,   
+    decay_factor: tl.float32,
     activate_method: tl.constexpr,
+    stride_sy,
     stride_sb,
     stride_sh,
     stride_slb,
     stride_sp,
+    stride_cy,
     stride_cb,
     stride_cp,
     stride_ch,
@@ -27,6 +29,7 @@ def global_score_kernel(
     stride_tn,
 ):
     pid = tl.program_id(0)
+    layer_id = tl.program_id(1)
 
     batch_idx = pid // (H_kv * MAX_BLOCKS_PER_SEQ)
     rem = pid % (H_kv * MAX_BLOCKS_PER_SEQ)
@@ -44,8 +47,14 @@ def global_score_kernel(
             + batch_idx * stride_sb
             + kv_head_idx * stride_sh
             + block_idx * stride_slb
+            + layer_id * stride_sy
         )
-        cache_base = score_cache_ptr + block_id * stride_cb + kv_head_idx * stride_ch
+        cache_base = (
+            score_cache_ptr
+            + block_id * stride_cb
+            + kv_head_idx * stride_ch
+            + layer_id * stride_cy
+        )
         for block_offset in range(0, BLOCK_SIZE, BLOCK_N):
             block_offs = block_offset + offs
             mask = block_offs < BLOCK_SIZE
@@ -78,8 +87,8 @@ def global_score(
     save the result to score_cache, return the result
 
     Arguments:
-        reduced_scores: Shape (batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
-        score_cache: Shape (num_kvcache_blocks, block_size, num_kv_heads)
+        reduced_scores: Shape (num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
+        score_cache: Shape (num_layers, num_kvcache_blocks, block_size, num_kv_heads)
         block_table: Shape (batch_size, max_num_blocks_per_seq)
         compressed: Shape (batch_size)
         decay_factor: float
@@ -88,9 +97,9 @@ def global_score(
     """
     BLOCK_N = 256
     assert decay_factor >= 0 and decay_factor <= 1
-    _, block_size, num_kv_heads = score_cache.shape
+    num_layers, _, block_size, num_kv_heads = score_cache.shape
     batch_size, max_num_blocks_per_seq = block_table.shape
-    grid_store = (batch_size * num_kv_heads * max_num_blocks_per_seq,)
+    grid_store = (batch_size * num_kv_heads * max_num_blocks_per_seq, num_layers)
     global_score_kernel[grid_store](
         reduced_scores,
         score_cache,
@@ -102,8 +111,8 @@ def global_score(
         block_size,
         decay_factor,
         activate_method,
-        **_strides(reduced_scores, "sb", "sh", "slb", "sp"),
-        **_strides(score_cache, "cb", "cp", "ch"),
+        **_strides(reduced_scores, "sy", "sb", "sh", "slb", "sp"),
+        **_strides(score_cache, "cy", "cb", "cp", "ch"),
         **_strides(block_table, "tb", "tn"),
     )
     return reduced_scores

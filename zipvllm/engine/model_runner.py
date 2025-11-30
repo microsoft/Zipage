@@ -19,6 +19,7 @@ from zipvllm.kernel.compress_score import compress_score
 from zipvllm.kernel.attention_score import attention_score
 from zipvllm.kernel.raw_similarity_score import raw_similarity_score
 from zipvllm.kernel.global_score import global_score
+from zipvllm.kernel.window_mask import window_mask
 from zipvllm.kernel.utils import topk_mask
 
 
@@ -30,15 +31,13 @@ class ModelRunner:
         self.config = config
         hf_config = config.hf_config
         self.block_size = config.kvcache_block_size
-        self.max_blocks_per_seq = config.max_blocks_per_seq
+        self.max_blocks_per_seq = config.max_cache_blocks_per_seq + 1
         self.enforce_eager = config.enforce_eager
         self.world_size = config.tensor_parallel_size
         self.rank = rank
         self.event = event
 
         self.query_cache_len = config.query_cache_len
-        self.query_selection_mode = config.query_selection_mode
-        self.query_interval = self.block_size // self.query_cache_len
         self.use_global_score = config.use_global_score
         self.decay_factor = config.decay_factor
         self.use_similarity = config.use_similarity
@@ -46,8 +45,9 @@ class ModelRunner:
         self.use_attention_sink = config.use_attention_sink
         self.sink_len = config.sink_len
         self.similarity_norm_method = config.similarity_norm_method
+        self.layer_stride = config.layer_stride
 
-        assert self.sink_len < self.block_size * (self.max_blocks_per_seq - 2)
+        assert self.sink_len < self.block_size * (self.max_blocks_per_seq - 1)
 
         dist.init_process_group(
             "nccl", f"tcp://localhost:{port}", world_size=self.world_size, rank=rank
@@ -219,71 +219,24 @@ class ModelRunner:
         if seq.seq_id == -1:
             return query_slot_mapping
         if is_prefill:
-            if self.query_selection_mode == "recent" or "entropy":
-                if seqlen_q % self.block_size > self.block_size - self.query_cache_len:
-                    start = (
-                        (seqlen_q + self.block_size - 1) // self.block_size
-                    ) * self.block_size - self.query_cache_len
-                    for idx, pos in enumerate(range(start, seqlen_q)):
-                        query_slot_mapping.append((cu_len + pos, seq.seq_id, idx))
-            elif self.query_selection_mode == "interval":
-                for idx, pos in enumerate(
-                    range(
-                        seqlen_q - seq.last_block_num_tokens + self.query_interval,
-                        seqlen_q,
-                        self.query_interval,
-                    )
-                ):
+            if seqlen_q % self.block_size > self.block_size - self.query_cache_len:
+                start = (
+                    (seqlen_q + self.block_size - 1) // self.block_size
+                ) * self.block_size - self.query_cache_len
+                for idx, pos in enumerate(range(start, seqlen_q)):
                     query_slot_mapping.append((cu_len + pos, seq.seq_id, idx))
 
         else:
-            if self.query_selection_mode == "recent":
-                if seq.last_block_num_tokens > self.block_size - self.query_cache_len:
-                    query_slot_mapping.append(
-                        (
-                            cu_len,
-                            seq.seq_id,
-                            seq.last_block_num_tokens
-                            - (self.block_size - self.query_cache_len)
-                            - 1,
-                        )
+            if seq.last_block_num_tokens > self.block_size - self.query_cache_len:
+                query_slot_mapping.append(
+                    (
+                        cu_len,
+                        seq.seq_id,
+                        seq.last_block_num_tokens
+                        - (self.block_size - self.query_cache_len)
+                        - 1,
                     )
-            elif self.query_selection_mode == "interval":
-                if seq.last_block_num_tokens % self.query_interval == 0:
-                    query_slot_mapping.append(
-                        (
-                            cu_len,
-                            seq.seq_id,
-                            seq.last_block_num_tokens // self.query_interval - 1,
-                        )
-                    )
-            elif self.query_selection_mode == "entropy":
-                if seq.last_block_num_tokens == 1:
-                    seq.query_entropy_list.clear()
-                if len(seq.query_entropy_list) < self.query_cache_len:
-                    seq.query_entropy_list.append(seq.last_token_entropy)
-                    query_slot_mapping.append(
-                        (
-                            cu_len,
-                            seq.seq_id,
-                            self.query_cache_len - len(seq.query_entropy_list),
-                        )
-                    )
-                else:
-                    min_entropy_idx = min(
-                        range(len(seq.query_entropy_list)),
-                        key=lambda i: seq.query_entropy_list[i],
-                    )
-                    if seq.query_entropy_list[min_entropy_idx] < seq.last_token_entropy:
-                        seq.query_entropy_list[min_entropy_idx] = seq.last_token_entropy
-                        query_slot_mapping.append(
-                            (
-                                cu_len,
-                                seq.seq_id,
-                                self.query_cache_len - min_entropy_idx - 1,
-                            )
-                        )
-
+                )
         return query_slot_mapping
 
     def prepare_prefill(self, seqs: list[Sequence]):
@@ -362,18 +315,17 @@ class ModelRunner:
         # prepare
         max_len_block_table = 0
         block_tables = []
-        last_block = []
         seq_ids = []
         compressed = []
         target_block_tables = []
         for seq in seqs:
             assert seq.require_compress
             seq_ids.append(seq.seq_id)
-            max_len_block_table = max(max_len_block_table, len(seq.block_table) - 1)
-            block_tables.append(seq.block_table[:-2] + [-seq.block_table[-2] - 2])
-            last_block.append(seq.block_table[-1])
+            max_len_block_table = max(max_len_block_table, len(seq.block_table))
+            # < 0 and !=-1 means the last block
+            block_tables.append(seq.block_table[:-1] + [-seq.block_table[-1] - 2])
             compressed.append(seq.compressed)
-            target_block_tables.append(seq.new_block_table[:-2])
+            target_block_tables.append(seq.new_block_table)
 
         seq_ids = torch.tensor(seq_ids, dtype=torch.int32, pin_memory=True).cuda(
             non_blocking=True
@@ -393,30 +345,31 @@ class ModelRunner:
             block_tables, dtype=torch.int32, pin_memory=True
         ).cuda(non_blocking=True)
 
-        last_block = torch.tensor(last_block, dtype=torch.int32, pin_memory=True).cuda(
-            non_blocking=True
-        )
+        for layer_id in range(0, len(self.model.model.layers), self.layer_stride):
+            k_cache = self.kv_cache[0, layer_id : layer_id + self.layer_stride]
+            v_cache = self.kv_cache[1, layer_id : layer_id + self.layer_stride]
+            query_cache = self.query_cache[layer_id : layer_id + self.layer_stride]
 
-        for layer_id in range(len(self.model.model.layers)):
-            k_cache = self.kv_cache[0, layer_id]
-            v_cache = self.kv_cache[1, layer_id]
-            query_cache = self.query_cache[layer_id]
-
+            # attention score
             start_time = perf_counter()
             scores = attention_score(k_cache, query_cache, seq_ids, block_tables)
             end_time = perf_counter()
             self.time_record["attention_score"] = end_time - start_time
             self.time_record["attention_score_sum"] += end_time - start_time
 
-            bsz, num_kv_heads, num_blocks, block_size = scores.shape
+            num_layers, bsz, num_kv_heads, num_blocks, block_size = scores.shape
+
+            # global score
             if self.use_global_score:
                 start_time = perf_counter()
-                scores = scores.view(bsz, num_kv_heads, -1)
+                scores = scores.view(num_layers, bsz, num_kv_heads, -1)
                 scores = scores.div_(scores.max(dim=-1, keepdim=True).values)
-                scores = scores.view(bsz, num_kv_heads, num_blocks, block_size)
+                scores = scores.view(
+                    num_layers, bsz, num_kv_heads, num_blocks, block_size
+                )
                 scores = global_score(
                     scores,
-                    self.score_cache[layer_id],
+                    self.score_cache[layer_id : layer_id + self.layer_stride],
                     block_tables,
                     compressed,
                     self.decay_factor,
@@ -425,34 +378,31 @@ class ModelRunner:
                 self.time_record["global_score"] = end_time - start_time
                 self.time_record["global_score_sum"] += end_time - start_time
 
-            scores = scores.view(bsz, num_kv_heads, -1)
+            # similarity score
+            scores = scores.view(num_layers, bsz, num_kv_heads, -1)
             if self.use_similarity:
                 start_time = perf_counter()
                 similarity = raw_similarity_score(
-                    k_cache, block_tables, last_block, norm_method=self.similarity_norm_method
-                ).view(bsz, num_kv_heads, -1)
-                if (
-                    self.use_global_score
-                    and not self.similarity_norm_method == "minmax"
-                ):
+                    k_cache,
+                    block_tables,
+                ).view(num_layers, bsz, num_kv_heads, -1)
+                if self.use_global_score:
                     similarity = similarity.div_(
                         similarity.max(dim=-1, keepdim=True).values
                     )
-                if (
-                    self.similarity_norm_method == "minmax"
-                    and not self.use_global_score
-                ):
-                    scores = scores.div_(scores.max(dim=-1, keepdim=True).values)
                 scores = scores * self.similarity_lambda + similarity * (
                     1 - self.similarity_lambda
                 )
                 end_time = perf_counter()
                 self.time_record["similarity_score"] = end_time - start_time
                 self.time_record["similarity_score_sum"] += end_time - start_time
+
+            # attention sink
             if self.use_attention_sink:
                 start_time = perf_counter()
                 mask = (
                     torch.arange(block_size * num_blocks, device=scores.device)
+                    .unsqueeze(0)
                     .unsqueeze(0)
                     .unsqueeze(0)
                     < self.sink_len
@@ -462,28 +412,40 @@ class ModelRunner:
                 self.time_record["attention_sink"] = end_time - start_time
                 self.time_record["attention_sink_sum"] += end_time - start_time
 
-            scores = scores.view(bsz, num_kv_heads, num_blocks, block_size)
+            scores = scores.view(num_layers, bsz, num_kv_heads, num_blocks, block_size)
+
+            # window mask
             start_time = perf_counter()
-            mask = (block_tables == -1).unsqueeze(1).unsqueeze(-1)
+            scores = window_mask(scores, block_tables, self.query_cache_len)
+            end_time = perf_counter()
+            self.time_record["window_mask"] = end_time - start_time
+            self.time_record["window_mask_sum"] += end_time - start_time
+
+            # top-k mask
+            start_time = perf_counter()
+            mask = (block_tables == -1).unsqueeze(1).unsqueeze(-1).unsqueeze(0)
             scores = scores.masked_fill_(mask, -float("inf"))
-            scores = scores.view(bsz, num_kv_heads, -1)
+            scores = scores.view(num_layers, bsz, num_kv_heads, -1)
             keep_flag = topk_mask(
-                scores, self.block_size * (self.max_blocks_per_seq - 2)
+                scores, self.block_size * (self.max_blocks_per_seq - 1)
             )
             keep_flag = keep_flag.view(bsz, num_kv_heads, num_blocks, block_size)
             end_time = perf_counter()
             self.time_record["topk_mask"] = end_time - start_time
             self.time_record["topk_mask_sum"] += end_time - start_time
 
+            # compress kv
             start_time = perf_counter()
             compress_kv(k_cache, v_cache, keep_flag, block_tables, target_block_tables)
             end_time = perf_counter()
             self.time_record["compress_kv"] = end_time - start_time
             self.time_record["compress_kv_sum"] += end_time - start_time
+
+            # compress global score
             if self.use_global_score:
                 start_time = perf_counter()
                 compress_score(
-                    self.score_cache[layer_id],
+                    self.score_cache[layer_id : layer_id + self.layer_stride],
                     keep_flag,
                     block_tables,
                     target_block_tables,
