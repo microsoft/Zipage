@@ -67,7 +67,11 @@ class LLMEngine:
 
     def _compress_task(self, compress_seqs: list[Sequence]):
         self.compress_task_event.set()
+        start_time = perf_counter()
         self.model_runner.call("compress", compress_seqs)
+        end_time = perf_counter()
+        self.time_record["compress"] = end_time - start_time
+        self.time_record["compress_sum"] += end_time - start_time
         self.scheduler.postprocess(compress_seqs)
         self.compress_task_event.clear()
 

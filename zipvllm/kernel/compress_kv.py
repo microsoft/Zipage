@@ -137,4 +137,5 @@ def compress_kv(
         block_size=block_size,
         batch_size=batch_size,
         max_num_blocks_per_seq=max_num_blocks_per_seq,
+        num_warps=1,
     )

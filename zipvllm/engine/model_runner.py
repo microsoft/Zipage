@@ -18,9 +18,11 @@ from zipvllm.kernel.compress_kv import compress_kv
 from zipvllm.kernel.compress_score import compress_score
 from zipvllm.kernel.attention_score import attention_score
 from zipvllm.kernel.raw_similarity_score import raw_similarity_score
+from zipvllm.kernel.flash_similarity_score import flash_similarity_score
 from zipvllm.kernel.global_score import global_score
 from zipvllm.kernel.window_mask import window_mask
 from zipvllm.kernel.utils import topk_mask
+import torch.nn.functional as F
 
 
 class ModelRunner:
@@ -45,6 +47,9 @@ class ModelRunner:
         self.use_attention_sink = config.use_attention_sink
         self.sink_len = config.sink_len
         self.layer_stride = config.layer_stride
+        self.enable_pooling = config.enable_pooling
+        self.continues_pooling = config.continues_pooling
+        self.pooling_size = 5
 
         assert self.sink_len < self.block_size * (self.max_blocks_per_seq - 1)
 
@@ -377,8 +382,42 @@ class ModelRunner:
                 self.time_record["global_score"] = end_time - start_time
                 self.time_record["global_score_sum"] += end_time - start_time
 
-            # similarity score
+            # seqnence dimension max pooling
+            scores = scores.view(num_layers * bsz, num_kv_heads, -1)
+            if self.enable_pooling:
+                if not self.continues_pooling and torch.all(compressed):
+                    pass
+                else:
+                    start_time = perf_counter()
+                    pooledscores = F.max_pool1d(
+                        scores,
+                        kernel_size=self.pooling_size,
+                        stride=1,
+                        padding=self.pooling_size // 2,
+                    )
+                    if not self.continues_pooling:
+                        compressed_mask = (
+                            compressed.unsqueeze(0)
+                            .expand(num_layers, bsz)
+                            .unsqueeze(-1)
+                            .unsqueeze(-1)
+                        )
+                        compressed_mask = compressed_mask.reshape(num_layers * bsz, 1, 1)
+
+                        scores = torch.where(
+                            compressed_mask,
+                            scores,
+                            pooledscores,
+                        )
+                    else:
+                        scores = pooledscores
+                    end_time = perf_counter()
+                    self.time_record["pooling"] = end_time - start_time
+                    self.time_record["pooling_sum"] += end_time - start_time
+
             scores = scores.view(num_layers, bsz, num_kv_heads, -1)
+
+            # similarity score
             if self.use_similarity:
                 start_time = perf_counter()
                 similarity = raw_similarity_score(
@@ -389,7 +428,7 @@ class ModelRunner:
                     similarity = similarity.div_(
                         similarity.max(dim=-1, keepdim=True).values
                     )
-                scores = scores * self.similarity_lambda + similarity * (
+                scores = scores * self.similarity_lambda - similarity * (
                     1 - self.similarity_lambda
                 )
                 end_time = perf_counter()

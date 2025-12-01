@@ -67,5 +67,6 @@ def window_mask(scores: torch.Tensor, block_table: torch.Tensor, query_cache_len
         num_kv_heads,
         **_strides(scores, "sy", "sb", "sh", "slb", "sp"),
         **_strides(block_table, "tb", "tn"),
+        num_warps=1,
     )
     return scores

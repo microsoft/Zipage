@@ -209,6 +209,7 @@ def attention_score(
         BLOCK_SIZE=block_size,
         QUERY_CACHE_LEN=query_cache_len,
         max_num_blocks_per_seq=max_num_blocks_per_seq,
+        num_warps=2,
     )
 
     qk_buffer = qk_buffer.reshape(

@@ -107,6 +107,7 @@ def key_norm(
         block_size=block_size,
         batch_size=batch_size,
         head_dim=head_dim,
+        num_warps=1,
     )
     key_norm = torch.clamp(key_norm, min=norm_epsilon)
     return key_norm

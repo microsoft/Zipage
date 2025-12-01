@@ -114,5 +114,6 @@ def global_score(
         **_strides(reduced_scores, "sy", "sb", "sh", "slb", "sp"),
         **_strides(score_cache, "cy", "cb", "cp", "ch"),
         **_strides(block_table, "tb", "tn"),
+        num_warps=1,
     )
     return reduced_scores

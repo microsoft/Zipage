@@ -27,6 +27,10 @@ class Config:
     # similarity score config
     use_similarity: bool = False
     similarity_lambda: float = 0.1
+    # pooling config
+    enable_pooling: bool = False
+    continues_pooling: bool = False
+    pooling_size: int = 5
     # engine config
     enable_async_compress: bool = False
     enable_hybrid_engine: bool = False
@@ -46,3 +50,4 @@ class Config:
         self.max_model_len = min(self.max_model_len, self.hf_config.max_position_embeddings)
         assert self.max_num_batched_tokens >= self.max_model_len
         assert self.max_cache_blocks_per_seq >= 1
+        assert self.pooling_size % 2 == 1

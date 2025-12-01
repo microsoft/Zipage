@@ -65,4 +65,5 @@ def store_query_cache(
         slot_mapping.stride(1),
         D=D,
         BLOCK_D=BLOCK_D,
+        num_warps=1,
     )
