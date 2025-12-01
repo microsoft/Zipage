@@ -44,7 +44,6 @@ class ModelRunner:
         self.similarity_lambda = config.similarity_lambda
         self.use_attention_sink = config.use_attention_sink
         self.sink_len = config.sink_len
-        self.similarity_norm_method = config.similarity_norm_method
         self.layer_stride = config.layer_stride
 
         assert self.sink_len < self.block_size * (self.max_blocks_per_seq - 1)
@@ -429,7 +428,9 @@ class ModelRunner:
             keep_flag = topk_mask(
                 scores, self.block_size * (self.max_blocks_per_seq - 1)
             )
-            keep_flag = keep_flag.view(bsz, num_kv_heads, num_blocks, block_size)
+            keep_flag = keep_flag.view(
+                num_layers, bsz, num_kv_heads, num_blocks, block_size
+            )
             end_time = perf_counter()
             self.time_record["topk_mask"] = end_time - start_time
             self.time_record["topk_mask_sum"] += end_time - start_time
@@ -561,7 +562,6 @@ class ModelRunner:
                 logits,
                 temperatures,
                 recent_token_ids,
-                self.query_selection_mode == "entropy",
             )
             if self.rank == 0
             else (None, None)

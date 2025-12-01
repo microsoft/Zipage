@@ -16,10 +16,11 @@ def main(args):
             path,
             enforce_eager=True,
             tensor_parallel_size=args.tensor_parallel_size,
-            max_blocks_per_seq=args.max_blocks_per_seq,
+            max_cache_blocks_per_seq=args.max_cache_blocks_per_seq,
             query_cache_len=args.query_cache_len,
             port=args.port,
             enable_log=True,
+            layer_stride=args.layer_stride,
             decay_factor=args.decay_factor,
             use_global_score=args.use_global_score,
             repetition_penalty=args.repetition_penalty,
@@ -99,7 +100,8 @@ if __name__ == "__main__":
 
     # compress related
     parser.add_argument("--compress", action="store_true")
-    parser.add_argument("--max_blocks_per_seq", type=int, default=8)
+    parser.add_argument("--layer_stride", type=int, default=1)
+    parser.add_argument("--max_cache_blocks_per_seq", type=int, default=8)
     parser.add_argument("--query_cache_len", type=int, default=16)
     parser.add_argument("--decay_factor", type=float, default=0.6)
     parser.add_argument("--use_global_score", action="store_true")

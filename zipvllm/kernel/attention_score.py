@@ -11,17 +11,17 @@ def attention_score_kernel(
     qk_buffer_ptr,
     seq_idx_ptr,
     block_table_ptr,
-    stride_qy,
+    stride_qy: tl.int64,
     stride_qs,
     stride_qc,
     stride_qh,
     stride_qd,
-    stride_ky,
+    stride_ky: tl.int64,
     stride_kb,
     stride_kc,
     stride_kh,
     stride_kd,
-    stride_sy,
+    stride_sy: tl.int64,
     stride_sb,
     stride_sh,
     stride_sc,
@@ -110,8 +110,8 @@ def attention_score_kernel(
                 if last_block:
                     col_index = (K_OFFSET + tl.arange(0, BLOCK_N))[None, :]
                     raw_index = tl.arange(
-                        BLOCK_SIZE - QUERY_CACHE_LEN ,
-                        BLOCK_SIZE - QUERY_CACHE_LEN +  BLOCK_M,
+                        BLOCK_SIZE - QUERY_CACHE_LEN,
+                        BLOCK_SIZE - QUERY_CACHE_LEN + BLOCK_M,
                     )[:, None]
                     raw_index = raw_index + q_id * BLOCK_M
                     mask = col_index > raw_index
@@ -163,6 +163,11 @@ def attention_score(
         softmax_scale = query_cache.shape[-1] ** (-0.5)
     G_q = num_attention_heads // num_kv_heads
     IS_GQA = G_q > 1
+
+    assert k_cache.is_contiguous()
+    assert query_cache.is_contiguous()
+    assert seq_idx.is_contiguous()
+    assert block_table.is_contiguous()
 
     qk_buffer = torch.full(
         (
