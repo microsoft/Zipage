@@ -26,6 +26,7 @@ class Config:
     decay_factor: float = 0.6
     # similarity score config
     use_similarity: bool = False
+    flash_similarity: bool = False
     similarity_lambda: float = 0.1
     # pooling config
     enable_pooling: bool = False

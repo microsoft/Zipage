@@ -43,6 +43,7 @@ class ModelRunner:
         self.use_global_score = config.use_global_score
         self.decay_factor = config.decay_factor
         self.use_similarity = config.use_similarity
+        self.flash_similarity = config.flash_similarity
         self.similarity_lambda = config.similarity_lambda
         self.use_attention_sink = config.use_attention_sink
         self.sink_len = config.sink_len
@@ -420,10 +421,16 @@ class ModelRunner:
             # similarity score
             if self.use_similarity:
                 start_time = perf_counter()
-                similarity = raw_similarity_score(
-                    k_cache,
-                    block_tables,
-                ).view(num_layers, bsz, num_kv_heads, -1)
+                if self.flash_similarity:
+                    similarity = flash_similarity_score(
+                        k_cache,
+                        block_tables,
+                    ).view(num_layers, bsz, num_kv_heads, -1)
+                else:
+                    similarity = raw_similarity_score(
+                        k_cache,
+                        block_tables,
+                    ).view(num_layers, bsz, num_kv_heads, -1)
                 if self.use_global_score:
                     similarity = similarity.div_(
                         similarity.max(dim=-1, keepdim=True).values

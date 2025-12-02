@@ -94,9 +94,7 @@ def cal_similarity_ref(key_cache, block_table, threshold=0.5, temperature=1.0):
     return similarity, logits
 
 
-def cal_similarity_hf(
-    key_cache, block_table,  threshold=0.5, temperature=1.0
-):
+def cal_similarity_hf(key_cache, block_table, threshold=0.5, temperature=1.0):
     num_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim = key_cache.shape
     batch_size, max_num_blocks_per_seq = block_table.shape
 
@@ -197,13 +195,13 @@ def cal_similarity_hf(
 
 
 def test():
-    num_kvcache_blocks = 20
+    num_kvcache_blocks = 40
     block_size = 256
-    num_kv_heads = 2
+    num_kv_heads = 8
     head_dim = 128
-    temperature = 0.2
+    temperature = 1
     threshold = 0.5
-    num_layers = 2
+    num_layers = 4
     key_cache = torch.randn(
         num_layers,
         num_kvcache_blocks,
@@ -214,16 +212,18 @@ def test():
         dtype=torch.float32,
     )
     block_table = torch.tensor(
-        [[0, 1, -4], [4, -7, -1]], device="cuda", dtype=torch.int32
+        [[0, 1, 2, 3, 4, 5, 6, -9], [8, 9, 10, 11, 12, 13, -16, -1]],
+        device="cuda",
+        dtype=torch.int32,
+    )
+    logits_hf, similarity_score_hf = cal_similarity_hf(
+        key_cache, block_table, threshold, temperature
     )
     logits, similarity_score = raw_similarity_score(
         key_cache, block_table, threshold, temperature, return_logits=True
     )
 
     similarity_score_ref, logits_ref = cal_similarity_ref(
-        key_cache, block_table, threshold, temperature
-    )
-    logits_hf, similarity_score_hf = cal_similarity_hf(
         key_cache, block_table, threshold, temperature
     )
     time_start = time.time()

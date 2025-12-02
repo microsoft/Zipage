@@ -119,17 +119,17 @@ def similarity_score_kernel(
             )
             zo = tl.load(zo_ptr, boundary_check=(1,))
             threshold_mask = ((similarity > threshold) & (~zo)).to(tl.int1)
-            col_indices = tl.arange(0, BLOCK_N)[None, :]
-            max_col_per_row = tl.max(
+            row_indices = tl.arange(0, BLOCK_M)[:, None]
+            max_row_per_col = tl.max(
                 tl.where(
                     threshold_mask,
-                    col_indices,
+                    row_indices,
                     -1,
                 ),
-                axis=1,
+                axis=0,
                 keep_dims=True,
             )
-            last_threshold_mask = (col_indices == max_col_per_row) & threshold_mask
+            last_threshold_mask = (row_indices == max_row_per_col) & threshold_mask
             similarity = tl.where(last_threshold_mask, 0.0, similarity)
             last_threshold_mask = tl.max(last_threshold_mask, axis=0, keep_dims=True)
             last_threshold_mask = last_threshold_mask | zo

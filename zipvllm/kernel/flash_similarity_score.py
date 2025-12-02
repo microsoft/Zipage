@@ -20,7 +20,6 @@ def flash_similarity_score_kernel(
     stride_sy: tl.int64,
     stride_sz,
     stride_sh,
-    stride_sn,
     stride_sb,
     stride_sl,
     stride_ny: tl.int64,
@@ -39,12 +38,10 @@ def flash_similarity_score_kernel(
 ):
     pid = tl.program_id(0)
     layer_id = tl.program_id(1)
-    head_idx = pid // (batch_size*max_num_blocks_per_seq*max_num_blocks_per_seq)
-    rem = pid % (batch_size*max_num_blocks_per_seq*max_num_blocks_per_seq)
-    batch_idx = rem // (max_num_blocks_per_seq*max_num_blocks_per_seq)
-    rem = rem % (max_num_blocks_per_seq*max_num_blocks_per_seq)
-    m_block_idx = rem // max_num_blocks_per_seq
-    n_block_idx = rem % max_num_blocks_per_seq
+    head_idx = pid // (batch_size * max_num_blocks_per_seq)
+    rem = pid % (batch_size * max_num_blocks_per_seq)
+    batch_idx = rem // (max_num_blocks_per_seq)
+    m_block_idx = rem % (max_num_blocks_per_seq)
 
     m_block_id = tl.load(
         block_table_ptr + batch_idx * stride_tz + m_block_idx * stride_tb
@@ -82,64 +79,48 @@ def flash_similarity_score_kernel(
             m_norm = tl.load(m_norm_ptr, boundary_check=(0,))
             m_key = m_key / (m_norm)
             s = tl.zeros((BLOCK_M, 1), dtype=tl.float32)
-            m_indices = (
-                m_block_idx * block_size
-                + m_block_offset
-                + tl.arange(0, BLOCK_M)[:, None]
-            )
+            m_indices = m_block_offset + tl.arange(0, BLOCK_M)[:, None]
 
-            n_block_id = tl.load(
-                block_table_ptr
-                + batch_idx * stride_tz
-                + n_block_idx * stride_tb
-            )
-            if not n_block_id == -1:
-                if n_block_id < 0:
-                    n_block_id = -n_block_id - 2
-                for n_block_offset in range(0, block_size, BLOCK_N):
-                    n_key_ptr = tl.make_block_ptr(
-                        base=key_cache_ptr
-                        + n_block_id * stride_kb
-                        + head_idx * stride_kh
-                        + layer_id * stride_ky,
-                        shape=(head_dim, block_size),
-                        strides=(stride_kd, stride_kl),
-                        offsets=(0, n_block_offset),
-                        block_shape=(head_dim, BLOCK_N),
-                        order=(0, 1),
-                    )
-                    n_key = tl.load(n_key_ptr, boundary_check=(1,))
-                    n_norm_ptr = tl.make_block_ptr(
-                        base=key_norm_ptr
-                        + batch_idx * stride_nz
-                        + head_idx * stride_nh
-                        + n_block_idx * stride_nb
-                        + layer_id * stride_ny,
-                        shape=(1, block_size),
-                        strides=(1, stride_nl),
-                        offsets=(0, n_block_offset),
-                        block_shape=(1, BLOCK_N),
-                        order=(0, 1),
-                    )
-                    n_norm = tl.load(n_norm_ptr, boundary_check=(0,))
-                    n_key = n_key / (n_norm)
-                    similarity = tl.dot(m_key, n_key)
-                    n_indices = (
-                        n_block_idx * block_size
-                        + n_block_offset
-                        + tl.arange(0, BLOCK_N)[None, :]
-                    )
-                    same_key_mask = m_indices == n_indices
-                    similarity = tl.where(same_key_mask, 0.0, similarity)
-                    similarity = tl.sum(similarity, axis=1, keep_dims=True)
-                    s = similarity + s
+            n_block_id = m_block_id
+            for n_block_offset in range(0, block_size, BLOCK_N):
+                n_key_ptr = tl.make_block_ptr(
+                    base=key_cache_ptr
+                    + n_block_id * stride_kb
+                    + head_idx * stride_kh
+                    + layer_id * stride_ky,
+                    shape=(head_dim, block_size),
+                    strides=(stride_kd, stride_kl),
+                    offsets=(0, n_block_offset),
+                    block_shape=(head_dim, BLOCK_N),
+                    order=(0, 1),
+                )
+                n_key = tl.load(n_key_ptr, boundary_check=(1,))
+                n_norm_ptr = tl.make_block_ptr(
+                    base=key_norm_ptr
+                    + batch_idx * stride_nz
+                    + head_idx * stride_nh
+                    + m_block_idx * stride_nb
+                    + layer_id * stride_ny,
+                    shape=(1, block_size),
+                    strides=(1, stride_nl),
+                    offsets=(0, n_block_offset),
+                    block_shape=(1, BLOCK_N),
+                    order=(0, 1),
+                )
+                n_norm = tl.load(n_norm_ptr, boundary_check=(0,))
+                n_key = n_key / (n_norm)
+                similarity = tl.dot(m_key, n_key)
+                n_indices = n_block_offset + tl.arange(0, BLOCK_N)[None, :]
+                same_key_mask = m_indices == n_indices
+                similarity = tl.where(same_key_mask, 0.0, similarity)
+                similarity = tl.sum(similarity, axis=1, keep_dims=True)
+                s = similarity + s
             s_ptr = tl.make_block_ptr(
                 base=similarity_cos_ptr
                 + batch_idx * stride_sz
                 + head_idx * stride_sh
                 + m_block_idx * stride_sb
-                + layer_id * stride_sy
-                + n_block_idx * stride_sn,
+                + layer_id * stride_sy,
                 shape=(block_size, 1),
                 strides=(stride_sl, 1),
                 offsets=(m_block_offset, 0),
@@ -181,7 +162,6 @@ def flash_similarity_score(
             batch_size,
             num_kv_heads,
             max_num_blocks_per_seq,
-            max_num_blocks_per_seq,
             block_size,
         ),
         -float("inf"),
@@ -190,7 +170,7 @@ def flash_similarity_score(
     )
 
     grid = (
-        batch_size * num_kv_heads * max_num_blocks_per_seq * max_num_blocks_per_seq,
+        batch_size * num_kv_heads * max_num_blocks_per_seq,
         num_layers,
     )
 
@@ -200,7 +180,7 @@ def flash_similarity_score(
         norm,
         block_table,
         **_strides(key_cache, "ky", "kb", "kl", "kh", "kd"),
-        **_strides(similarity_cos, "sy", "sz", "sh", "sn","sb", "sl"),
+        **_strides(similarity_cos, "sy", "sz", "sh", "sb", "sl"),
         **_strides(norm, "ny", "nz", "nh", "nb", "nl"),
         **_strides(block_table, "tz", "tb"),
         max_num_blocks_per_seq=max_num_blocks_per_seq,
@@ -212,15 +192,13 @@ def flash_similarity_score(
         num_warps=2,
     )
     del norm
-    similarity_cos = similarity_cos.sum(dim=-3)
-    similarity_cos = similarity_cos.view(num_layers, batch_size, num_kv_heads, -1)
+    
     if return_logits:
         logits = similarity_cos.clone()
 
-    seq_length = (block_table != -1).sum(dim=-1) * block_size
-    similarity_cos = similarity_cos.div_(
-        temperature * seq_length.unsqueeze(-1).unsqueeze(-1)
-    )
+    similarity_cos = similarity_cos.view(num_layers, batch_size, num_kv_heads, -1)
+
+    similarity_cos = similarity_cos.div_(temperature * block_size)
     dtype = similarity_cos.dtype
     similarity_cos = similarity_cos.float()
     similarity_cos = similarity_cos - similarity_cos.max(dim=-1, keepdim=True).values
