@@ -31,8 +31,12 @@ def main(args):
             enable_prefix_cache=args.enable_prefix_cache,
             similarity_lambda=args.similarity_lambda,
             use_similarity=args.use_similarity,
+            lightning_similarity=args.lightning_similarity,
             gpu_memory_utilization=args.gpu_memory_utilization,
             max_num_batched_tokens=args.max_num_batched_tokens,
+            enable_pooling=args.enable_pooling,
+            continues_pooling=args.continues_pooling,
+            pooling_size=args.pooling_size,
         )
     else:
         from nanovllm import SamplingParams
@@ -112,7 +116,11 @@ if __name__ == "__main__":
     parser.add_argument("--use_attention_sink", action="store_true")
     parser.add_argument("--sink_len", type=int, default=4)
     parser.add_argument("--similarity_lambda", type=float, default=0.4)
+    parser.add_argument("--lightning_similarity", action="store_true")
     parser.add_argument("--use_similarity", action="store_true")
     parser.add_argument("--enable_prefix_cache", action="store_true")
+    parser.add_argument("--enable_pooling", action="store_true")
+    parser.add_argument("--continues_pooling", action="store_true")
+    parser.add_argument("--pooling_size", type=int, default=5)
     args = parser.parse_args()
     main(args)

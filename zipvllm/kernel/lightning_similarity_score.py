@@ -7,10 +7,11 @@ from zipvllm.kernel.key_norm import key_norm
 
 
 @triton.jit
-def flash_similarity_score_kernel(
+def lightning_similarity_score_kernel(
     key_cache_ptr,
     similarity_cos_ptr,
     key_norm_ptr,
+    zero_out_ptr,
     block_table_ptr,
     stride_ky: tl.int64,
     stride_kb,
@@ -27,6 +28,11 @@ def flash_similarity_score_kernel(
     stride_nh,
     stride_nb,
     stride_nl,
+    stride_zy: tl.int64,
+    stride_zz,
+    stride_zh,
+    stride_zb,
+    stride_zl,
     stride_tz,
     stride_tb,
     BLOCK_M: tl.constexpr,
@@ -35,6 +41,7 @@ def flash_similarity_score_kernel(
     block_size: tl.constexpr,
     batch_size: tl.int32,
     head_dim: tl.constexpr,
+    threshold: tl.float32,
 ):
     pid = tl.program_id(0)
     layer_id = tl.program_id(1)
@@ -113,6 +120,38 @@ def flash_similarity_score_kernel(
                 n_indices = n_block_offset + tl.arange(0, BLOCK_N)[None, :]
                 same_key_mask = m_indices == n_indices
                 similarity = tl.where(same_key_mask, 0.0, similarity)
+                zo_ptr = tl.make_block_ptr(
+                    base=zero_out_ptr
+                    + batch_idx * stride_zz
+                    + head_idx * stride_zh
+                    + m_block_idx * stride_zb
+                    + layer_id * stride_zy,
+                    shape=(1, block_size),
+                    strides=(1, stride_zl),
+                    offsets=(0, n_block_offset),
+                    block_shape=(1, BLOCK_N),
+                    order=(0, 1),
+                )
+                zo = tl.load(zo_ptr, boundary_check=(1,))
+                threshold_mask = ((similarity > threshold) & (~zo)).to(tl.int1)
+                row_indices = tl.arange(0, BLOCK_M)[:, None]
+                max_idx_per_col = tl.max(
+                    tl.where(
+                        threshold_mask,
+                        row_indices,
+                        -1,
+                    ),
+                    axis=0,
+                    keep_dims=True,
+                )
+                last_threshold_mask = row_indices == max_idx_per_col
+                similarity = tl.where(last_threshold_mask, 0.0, similarity)
+                last_threshold_mask = tl.max(
+                    last_threshold_mask, axis=0, keep_dims=True
+                )
+                last_threshold_mask = last_threshold_mask | zo
+                last_threshold_mask = last_threshold_mask.to(zo.dtype)
+                tl.store(zo_ptr, last_threshold_mask, boundary_check=(1,))
                 similarity = tl.sum(similarity, axis=1, keep_dims=True)
                 s = similarity + s
             s_ptr = tl.make_block_ptr(
@@ -130,7 +169,7 @@ def flash_similarity_score_kernel(
             tl.store(s_ptr, s.to(raw_dtype), boundary_check=(0,))
 
 
-def flash_similarity_score(
+def lightning_similarity_score(
     key_cache: torch.Tensor,
     block_table: torch.Tensor,
     threshold: float = 0.5,
@@ -168,20 +207,28 @@ def flash_similarity_score(
         device=key_cache.device,
         dtype=key_cache.dtype,
     )
+    zero_out = torch.full(
+        (num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size),
+        False,
+        device=key_cache.device,
+        dtype=torch.bool,
+    )
 
     grid = (
         batch_size * num_kv_heads * max_num_blocks_per_seq,
         num_layers,
     )
 
-    flash_similarity_score_kernel[grid](
+    lightning_similarity_score_kernel[grid](
         key_cache,
         similarity_cos,
         norm,
+        zero_out,
         block_table,
         **_strides(key_cache, "ky", "kb", "kl", "kh", "kd"),
         **_strides(similarity_cos, "sy", "sz", "sh", "sb", "sl"),
         **_strides(norm, "ny", "nz", "nh", "nb", "nl"),
+        **_strides(zero_out, "zy", "zz", "zh", "zb", "zl"),
         **_strides(block_table, "tz", "tb"),
         max_num_blocks_per_seq=max_num_blocks_per_seq,
         BLOCK_M=BLOCK_M,
@@ -189,10 +236,12 @@ def flash_similarity_score(
         block_size=block_size,
         batch_size=batch_size,
         head_dim=head_dim,
+        threshold=threshold,
         num_warps=2,
     )
     del norm
-    
+    del zero_out
+
     if return_logits:
         logits = similarity_cos.clone()
 

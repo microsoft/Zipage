@@ -18,7 +18,7 @@ from zipvllm.kernel.compress_kv import compress_kv
 from zipvllm.kernel.compress_score import compress_score
 from zipvllm.kernel.attention_score import attention_score
 from zipvllm.kernel.raw_similarity_score import raw_similarity_score
-from zipvllm.kernel.flash_similarity_score import flash_similarity_score
+from zipvllm.kernel.lightning_similarity_score import lightning_similarity_score
 from zipvllm.kernel.global_score import global_score
 from zipvllm.kernel.window_mask import window_mask
 from zipvllm.kernel.utils import topk_mask
@@ -43,7 +43,7 @@ class ModelRunner:
         self.use_global_score = config.use_global_score
         self.decay_factor = config.decay_factor
         self.use_similarity = config.use_similarity
-        self.flash_similarity = config.flash_similarity
+        self.lightning_similarity = config.lightning_similarity
         self.similarity_lambda = config.similarity_lambda
         self.use_attention_sink = config.use_attention_sink
         self.sink_len = config.sink_len
@@ -421,8 +421,8 @@ class ModelRunner:
             # similarity score
             if self.use_similarity:
                 start_time = perf_counter()
-                if self.flash_similarity:
-                    similarity = flash_similarity_score(
+                if self.lightning_similarity:
+                    similarity = lightning_similarity_score(
                         k_cache,
                         block_tables,
                     ).view(num_layers, bsz, num_kv_heads, -1)
