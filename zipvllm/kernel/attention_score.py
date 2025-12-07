@@ -43,11 +43,10 @@ def attention_score_kernel(
 ):
     pid = tl.program_id(0)
     layer_id = tl.program_id(1)
-    num_q_blocks = tl.cdiv(QUERY_CACHE_LEN, BLOCK_M)
-    bsz = pid // (H_q * num_q_blocks)
-    rem = pid % (H_q * num_q_blocks)
-    head_id = rem // num_q_blocks
-    q_id = rem % num_q_blocks
+    bsz = pid // (H_q * max_num_blocks_per_seq)
+    rem = pid % (H_q * max_num_blocks_per_seq)
+    head_id = rem // max_num_blocks_per_seq
+    block_idx = rem % max_num_blocks_per_seq
 
     seq_id = tl.load(seq_idx_ptr + bsz)
 
@@ -64,17 +63,20 @@ def attention_score_kernel(
         + layer_id * stride_qy
     )
 
-    Q_block_ptr = tl.make_block_ptr(
-        base=Q_base,
-        shape=(QUERY_CACHE_LEN, ACTUAL_BLOCK_DMODEL),
-        strides=(stride_qc, stride_qd),
-        offsets=(q_id * BLOCK_M, 0),
-        block_shape=(BLOCK_M, BLOCK_DMODEL),
-        order=(1, 0),
-    )
-    q = tl.load(Q_block_ptr, boundary_check=(0, 1))
+    num_q_blocks = tl.cdiv(QUERY_CACHE_LEN, BLOCK_M)
 
-    for block_idx in range(max_num_blocks_per_seq):
+    for q_id in range(num_q_blocks):
+
+        Q_block_ptr = tl.make_block_ptr(
+            base=Q_base,
+            shape=(QUERY_CACHE_LEN, ACTUAL_BLOCK_DMODEL),
+            strides=(stride_qc, stride_qd),
+            offsets=(q_id * BLOCK_M, 0),
+            block_shape=(BLOCK_M, BLOCK_DMODEL),
+            order=(1, 0),
+        )
+        q = tl.load(Q_block_ptr, boundary_check=(0, 1))
+
         block_id = tl.load(block_table_ptr + bsz * stride_tb + block_idx * stride_tn)
         if not block_id == -1:
             if block_id < 0:
@@ -184,7 +186,7 @@ def attention_score(
     )
 
     grid_qk = (
-        triton.cdiv(query_cache_len, BLOCK_M) * batch_size * num_attention_heads,
+        max_num_blocks_per_seq * batch_size * num_attention_heads,
         num_layers,
     )
 

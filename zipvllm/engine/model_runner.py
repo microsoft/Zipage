@@ -40,16 +40,23 @@ class ModelRunner:
         self.event = event
 
         self.query_cache_len = config.query_cache_len
+
         self.use_global_score = config.use_global_score
+        self.max_norm = config.max_norm
         self.decay_factor = config.decay_factor
+
         self.use_similarity = config.use_similarity
         self.lightning_similarity = config.lightning_similarity
         self.similarity_lambda = config.similarity_lambda
+        self.similarity_temperature = config.similarity_temperature
+
+        self.enable_pooling = config.enable_pooling
+        self.continues_pooling = config.continues_pooling
+
         self.use_attention_sink = config.use_attention_sink
         self.sink_len = config.sink_len
         self.layer_stride = config.layer_stride
-        self.enable_pooling = config.enable_pooling
-        self.continues_pooling = config.continues_pooling
+        
         self.pooling_size = 5
 
         assert self.sink_len < self.block_size * (self.max_blocks_per_seq - 1)
@@ -165,6 +172,8 @@ class ModelRunner:
         config.num_kvcache_blocks = int(
             total * config.gpu_memory_utilization - used - peak + current
         ) // (block_bytes + query_cache_bytes // max_block_perseq)
+
+        assert config.num_kvcache_blocks > 0
 
         config.max_num_seqs = min(
             config.max_num_seqs, config.num_kvcache_blocks // max_block_perseq
@@ -367,11 +376,12 @@ class ModelRunner:
             # global score
             if self.use_global_score:
                 start_time = perf_counter()
-                scores = scores.view(num_layers, bsz, num_kv_heads, -1)
-                scores = scores.div_(scores.max(dim=-1, keepdim=True).values)
-                scores = scores.view(
-                    num_layers, bsz, num_kv_heads, num_blocks, block_size
-                )
+
+                if self.max_norm:
+                    scores = scores.view(num_layers , bsz, num_kv_heads, -1)
+                    scores = scores.div_(scores.max(dim=-1, keepdim=True).values)
+                    scores = scores.view(num_layers, bsz, num_kv_heads, num_blocks, block_size)
+                    
                 scores = global_score(
                     scores,
                     self.score_cache[layer_id : layer_id + self.layer_stride],
@@ -403,7 +413,9 @@ class ModelRunner:
                             .unsqueeze(-1)
                             .unsqueeze(-1)
                         )
-                        compressed_mask = compressed_mask.reshape(num_layers * bsz, 1, 1)
+                        compressed_mask = compressed_mask.reshape(
+                            num_layers * bsz, 1, 1
+                        )
 
                         scores = torch.where(
                             compressed_mask,
@@ -416,7 +428,7 @@ class ModelRunner:
                     self.time_record["pooling"] = end_time - start_time
                     self.time_record["pooling_sum"] += end_time - start_time
 
-            scores = scores.view(num_layers, bsz, num_kv_heads, -1)
+            scores = scores.view(num_layers, bsz, num_kv_heads, num_blocks, block_size)
 
             # similarity score
             if self.use_similarity:
@@ -425,16 +437,18 @@ class ModelRunner:
                     similarity = lightning_similarity_score(
                         k_cache,
                         block_tables,
-                    ).view(num_layers, bsz, num_kv_heads, -1)
+                        temperature=self.similarity_temperature,
+                    )
                 else:
                     similarity = raw_similarity_score(
                         k_cache,
                         block_tables,
-                    ).view(num_layers, bsz, num_kv_heads, -1)
-                if self.use_global_score:
-                    similarity = similarity.div_(
-                        similarity.max(dim=-1, keepdim=True).values
+                        temperature=self.similarity_temperature,
                     )
+                if self.use_global_score and self.max_norm:
+                    similarity = similarity.view(num_layers, bsz, num_kv_heads, -1)
+                    similarity = similarity.div_(similarity.max(dim=-1, keepdim=True).values)
+                    similarity = similarity.reshape(num_layers, bsz, num_kv_heads, num_blocks, block_size)
                 scores = scores * self.similarity_lambda - similarity * (
                     1 - self.similarity_lambda
                 )
@@ -445,6 +459,7 @@ class ModelRunner:
             # attention sink
             if self.use_attention_sink:
                 start_time = perf_counter()
+                scores = scores.view(num_layers, bsz, num_kv_heads, -1)
                 mask = (
                     torch.arange(block_size * num_blocks, device=scores.device)
                     .unsqueeze(0)
