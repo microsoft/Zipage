@@ -3,7 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 import torch.distributed as dist
 
-from zipvllm.utils.context import get_context
+from zipage.utils.context import get_context
 from nanovllm.layers.embed_head import VocabParallelEmbedding
 
 

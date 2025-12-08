@@ -1,7 +1,7 @@
 import triton
 import triton.language as tl
 import torch
-from zipvllm.kernel.utils import get_padded_headsize, _strides
+from zipage.kernel.utils import get_padded_headsize, _strides
 
 
 @triton.jit

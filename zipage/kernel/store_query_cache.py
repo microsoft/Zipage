@@ -1,7 +1,6 @@
 import triton
 import triton.language as tl
 import torch
-from zipvllm.kernel.utils import _strides
 
 
 @triton.jit

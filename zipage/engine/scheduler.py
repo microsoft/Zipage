@@ -1,8 +1,8 @@
 from collections import deque
 
-from zipvllm.config import Config
-from zipvllm.engine.sequence import Sequence, SequenceStatus
-from zipvllm.engine.block_manager import BlockManager
+from zipage.config import Config
+from zipage.engine.sequence import Sequence, SequenceStatus
+from zipage.engine.block_manager import BlockManager
 from typing import Optional
 import threading
 

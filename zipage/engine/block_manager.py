@@ -3,7 +3,7 @@ import threading
 import xxhash
 import numpy as np
 
-from zipvllm.engine.sequence import Sequence
+from zipage.engine.sequence import Sequence
 
 
 class Block:

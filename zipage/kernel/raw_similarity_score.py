@@ -2,8 +2,8 @@ import triton
 import triton.language as tl
 import torch
 
-from zipvllm.kernel.utils import _strides
-from zipvllm.kernel.key_norm import key_norm
+from zipage.kernel.utils import _strides
+from zipage.kernel.key_norm import key_norm
 
 
 

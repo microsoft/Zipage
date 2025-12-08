@@ -7,21 +7,21 @@ from multiprocessing.shared_memory import SharedMemory
 from time import perf_counter
 from collections import defaultdict
 
-from zipvllm.layers.sampler import Sampler
-from zipvllm.config import Config
-from zipvllm.engine.sequence import Sequence
-from zipvllm.models import AutoModelForCausalLM
-from zipvllm.utils.context import set_context, get_context, reset_context
-from zipvllm.utils.loader import load_model
+from zipage.layers.sampler import Sampler
+from zipage.config import Config
+from zipage.engine.sequence import Sequence
+from zipage.models import AutoModelForCausalLM
+from zipage.utils.context import set_context, get_context, reset_context
+from zipage.utils.loader import load_model
 
-from zipvllm.kernel.compress_kv import compress_kv
-from zipvllm.kernel.compress_score import compress_score
-from zipvllm.kernel.attention_score import attention_score
-from zipvllm.kernel.raw_similarity_score import raw_similarity_score
-from zipvllm.kernel.lightning_similarity_score import lightning_similarity_score
-from zipvllm.kernel.global_score import global_score
-from zipvllm.kernel.window_mask import window_mask
-from zipvllm.kernel.utils import topk_mask
+from zipage.kernel.compress_kv import compress_kv
+from zipage.kernel.compress_score import compress_score
+from zipage.kernel.attention_score import attention_score
+from zipage.kernel.raw_similarity_score import raw_similarity_score
+from zipage.kernel.lightning_similarity_score import lightning_similarity_score
+from zipage.kernel.global_score import global_score
+from zipage.kernel.window_mask import window_mask
+from zipage.kernel.utils import topk_mask
 import torch.nn.functional as F
 
 
