@@ -368,10 +368,12 @@ class ModelRunner:
             start_time = perf_counter()
             scores = attention_score(k_cache, query_cache, seq_ids, block_tables)
             end_time = perf_counter()
-            self.time_record["attention_score"] = end_time - start_time
+            
+            num_layers, bsz, num_kv_heads, num_blocks, block_size = scores.shape
+            if num_layers==self.layer_stride:
+                self.time_record["attention_score"] = end_time - start_time
             self.time_record["attention_score_sum"] += end_time - start_time
 
-            num_layers, bsz, num_kv_heads, num_blocks, block_size = scores.shape
 
             # global score
             if self.use_global_score:
@@ -390,7 +392,8 @@ class ModelRunner:
                     self.decay_factor,
                 )
                 end_time = perf_counter()
-                self.time_record["global_score"] = end_time - start_time
+                if num_layers==self.layer_stride:
+                    self.time_record["global_score"] = end_time - start_time
                 self.time_record["global_score_sum"] += end_time - start_time
 
             # seqnence dimension max pooling
@@ -425,7 +428,8 @@ class ModelRunner:
                     else:
                         scores = pooledscores
                     end_time = perf_counter()
-                    self.time_record["pooling"] = end_time - start_time
+                    if num_layers==self.layer_stride:
+                        self.time_record["pooling"] = end_time - start_time
                     self.time_record["pooling_sum"] += end_time - start_time
 
             scores = scores.view(num_layers, bsz, num_kv_heads, num_blocks, block_size)
@@ -453,7 +457,8 @@ class ModelRunner:
                     1 - self.similarity_lambda
                 )
                 end_time = perf_counter()
-                self.time_record["similarity_score"] = end_time - start_time
+                if num_layers==self.layer_stride:
+                    self.time_record["similarity_score"] = end_time - start_time
                 self.time_record["similarity_score_sum"] += end_time - start_time
 
             # attention sink
@@ -469,7 +474,8 @@ class ModelRunner:
                 )
                 scores = scores.masked_fill_(mask, float("inf"))
                 end_time = perf_counter()
-                self.time_record["attention_sink"] = end_time - start_time
+                if num_layers==self.layer_stride:
+                    self.time_record["attention_sink"] = end_time - start_time
                 self.time_record["attention_sink_sum"] += end_time - start_time
 
             scores = scores.view(num_layers, bsz, num_kv_heads, num_blocks, block_size)
@@ -478,7 +484,8 @@ class ModelRunner:
             start_time = perf_counter()
             scores = window_mask(scores, block_tables, self.query_cache_len)
             end_time = perf_counter()
-            self.time_record["window_mask"] = end_time - start_time
+            if num_layers==self.layer_stride:
+                self.time_record["window_mask"] = end_time - start_time
             self.time_record["window_mask_sum"] += end_time - start_time
 
             # top-k mask
@@ -493,14 +500,16 @@ class ModelRunner:
                 num_layers, bsz, num_kv_heads, num_blocks, block_size
             )
             end_time = perf_counter()
-            self.time_record["topk_mask"] = end_time - start_time
+            if num_layers==self.layer_stride:
+                self.time_record["topk_mask"] = end_time - start_time
             self.time_record["topk_mask_sum"] += end_time - start_time
 
             # compress kv
             start_time = perf_counter()
             compress_kv(k_cache, v_cache, keep_flag, block_tables, target_block_tables)
             end_time = perf_counter()
-            self.time_record["compress_kv"] = end_time - start_time
+            if num_layers==self.layer_stride:
+                self.time_record["compress_kv"] = end_time - start_time
             self.time_record["compress_kv_sum"] += end_time - start_time
 
             # compress global score
@@ -513,7 +522,8 @@ class ModelRunner:
                     target_block_tables,
                 )
                 end_time = perf_counter()
-                self.time_record["global_score"] += end_time - start_time
+                if num_layers==self.layer_stride:
+                    self.time_record["global_score"] += end_time - start_time
                 self.time_record["global_score_sum"] += end_time - start_time
         return seqs
 

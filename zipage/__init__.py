@@ -1,2 +1,2 @@
-from zipvllm.llm import ZipLLM, NanoLLM
-from zipvllm.sampling_params import SamplingParams
+from zipage.llm import ZipLLM, NanoLLM
+from zipage.sampling_params import SamplingParams

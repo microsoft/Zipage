@@ -1,7 +1,7 @@
 import os
 import json
 from transformers import AutoTokenizer
-from utils.dataloader import load_data
+from utils.dataloader import load_math_data
 
 
 def main(args):
@@ -10,7 +10,7 @@ def main(args):
     tokenizer = AutoTokenizer.from_pretrained(path)
 
     if args.compress:
-        from zipvllm import ZipLLM as LLM, SamplingParams
+        from zipage import ZipLLM as LLM, SamplingParams
 
         llm = LLM(
             path,
@@ -23,6 +23,7 @@ def main(args):
             layer_stride=args.layer_stride,
             decay_factor=args.decay_factor,
             use_global_score=args.use_global_score,
+            max_norm=args.max_norm,
             repetition_penalty=args.repetition_penalty,
             query_selection_mode=args.query_selection_mode,
             enable_async_compress=args.enable_async_compress,
@@ -31,6 +32,7 @@ def main(args):
             enable_prefix_cache=args.enable_prefix_cache,
             similarity_lambda=args.similarity_lambda,
             use_similarity=args.use_similarity,
+            similarity_temperature=args.similarity_temperature,
             lightning_similarity=args.lightning_similarity,
             gpu_memory_utilization=args.gpu_memory_utilization,
             max_num_batched_tokens=args.max_num_batched_tokens,
@@ -40,7 +42,7 @@ def main(args):
         )
     else:
         from nanovllm import SamplingParams
-        from zipvllm import NanoLLM as LLM
+        from zipage import NanoLLM as LLM
 
         llm = LLM(
             path,
@@ -52,7 +54,7 @@ def main(args):
         )
     sampling_params = SamplingParams(temperature=0.6, max_tokens=args.max_tokens)
 
-    prompts, data = load_data(
+    prompts, data = load_math_data(
         args.dataset,
         tokenizer,
         n_sample=args.n_sample,
@@ -109,6 +111,7 @@ if __name__ == "__main__":
     parser.add_argument("--query_cache_len", type=int, default=16)
     parser.add_argument("--decay_factor", type=float, default=0.6)
     parser.add_argument("--use_global_score", action="store_true")
+    parser.add_argument("--max_norm", action="store_true")
     parser.add_argument("--query_selection_mode", type=str, default="recent")
     parser.add_argument("--enable_async_compress", action="store_true")
     parser.add_argument("--enable_hybrid_engine", action="store_true")
@@ -117,6 +120,7 @@ if __name__ == "__main__":
     parser.add_argument("--sink_len", type=int, default=4)
     parser.add_argument("--similarity_lambda", type=float, default=0.4)
     parser.add_argument("--lightning_similarity", action="store_true")
+    parser.add_argument("--similarity_temperature", type=float, default=1.0)
     parser.add_argument("--use_similarity", action="store_true")
     parser.add_argument("--enable_prefix_cache", action="store_true")
     parser.add_argument("--enable_pooling", action="store_true")

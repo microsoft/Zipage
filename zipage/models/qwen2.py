@@ -4,15 +4,15 @@ import torch.distributed as dist
 from transformers import Qwen2Config
 
 from nanovllm.layers.activation import SiluAndMul
-from zipvllm.layers.attention import Attention
+from zipage.layers.attention import Attention
 from nanovllm.layers.layernorm import RMSNorm
 from nanovllm.layers.linear import (
     QKVParallelLinear,
     MergedColumnParallelLinear,
     RowParallelLinear,
 )
-from zipvllm.layers.rotary_embedding import get_rope
-from zipvllm.layers.embed_head import VocabParallelEmbedding, ParallelLMHead
+from zipage.layers.rotary_embedding import get_rope
+from zipage.layers.embed_head import VocabParallelEmbedding, ParallelLMHead
 
 
 class Qwen2Attention(nn.Module):
