@@ -39,6 +39,7 @@ class LLMEngine:
         self.scheduler = Scheduler(config)
 
         self.enable_log = kwargs.get("enable_log", False)
+        self.log_interval = kwargs.get("log_interval", 5)
         self.logger = defaultdict(list)
         self.executor = ThreadPoolExecutor(max_workers=2)
         self.compress_future = None
@@ -187,18 +188,20 @@ class LLMEngine:
 
         for key in self.time_record:
             if not key.endswith("_sum"):
-                self.logger[key].append(self.time_record[key])
+                if (not key in self.logger) or (self.logger[key][-1]!=self.time_record[key]):
+                    self.logger[key].append(self.time_record[key])
 
         for key in self.model_runner.time_record:
             if not key.endswith("_sum"):
-                self.logger[key].append(self.model_runner.time_record[key])
+                if (not key in self.logger) or (self.logger[key][-1]!=self.model_runner.time_record[key]):
+                    self.logger[key].append(self.model_runner.time_record[key])
 
     def log_step(self, time_from_start, running_seqs, waiting_seqs, decode_throughput):
         if not self.enable_log:
             return
         should_log = ("time" not in self.logger) or time_from_start - self.logger[
             "time"
-        ][-1] > 5
+        ][-1] > self.log_interval
         if should_log:
             self._append_log_entry(
                 time_from_start, running_seqs, waiting_seqs, decode_throughput

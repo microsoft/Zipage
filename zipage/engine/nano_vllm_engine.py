@@ -13,6 +13,7 @@ from nanovllm.engine.model_runner import ModelRunner
 
 from collections import defaultdict
 
+
 class LLMEngine:
 
     def __init__(self, model, **kwargs):
@@ -34,6 +35,7 @@ class LLMEngine:
         self.scheduler = Scheduler(config)
         self.enable_log = kwargs.get("enable_log", False)
         self.logger = defaultdict(list)
+        self.time_record = defaultdict(int)
         atexit.register(self.exit)
 
     def exit(self):
@@ -50,8 +52,16 @@ class LLMEngine:
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
+        start_time = perf_counter()
         token_ids = self.model_runner.call("run", seqs, is_prefill)
         self.scheduler.postprocess(seqs, token_ids)
+        end_time = perf_counter()
+        if is_prefill:
+            self.time_record["prefill"] = end_time - start_time
+            self.time_record["prefill_sum"] += end_time - start_time
+        else:
+            self.time_record["decode"] = end_time - start_time
+            self.time_record["decode_sum"] += end_time - start_time
         outputs = [
             (seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished
         ]
@@ -84,6 +94,12 @@ class LLMEngine:
                     self.logger["waiting_seqs"].append(waiting_seqs)
                     self.logger["block_occupancy"].append(block_occupancy)
                     self.logger["time"].append(time_from_start)
+                    for key in self.time_record:
+                        if not key.endswith("_sum"):
+                            if (not key in self.logger) or (
+                                self.logger[key][-1] != self.time_record[key]
+                            ):
+                                self.logger[key].append(self.time_record[key])
 
     def generate(
         self,

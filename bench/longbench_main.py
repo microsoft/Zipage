@@ -1,7 +1,7 @@
 import os
 import json
 from transformers import AutoTokenizer
-from utils.dataloader import load_math_data
+from utils.longbench_dataloader import load_longbench_data
 
 
 def main(args):
@@ -39,6 +39,7 @@ def main(args):
             enable_pooling=args.enable_pooling,
             continues_pooling=args.continues_pooling,
             pooling_size=args.pooling_size,
+            log_interval=args.log_interval,
         )
     else:
         from nanovllm import SamplingParams
@@ -52,20 +53,52 @@ def main(args):
             max_num_batched_tokens=args.max_num_batched_tokens,
             enable_log=True,
         )
-    sampling_params = SamplingParams(temperature=0.6, max_tokens=args.max_tokens)
 
-    prompts, data = load_math_data(
-        args.dataset,
-        tokenizer,
-        n_sample=args.n_sample,
-        system_prompt=args.system_prompt,
-        split_len=args.split_len,
-    )
+    if args.dataset is None:
+        datasets = [
+            "qasper",
+            "multifieldqa_en",
+            "hotpotqa",
+            "2wikimqa",
+            "gov_report",
+            "multi_news",
+            "trec",
+            "triviaqa",
+            "samsum",
+            "passage_count",
+            "passage_retrieval_en",
+            "lcc",
+            "repobench-p",
+        ]
+    else:
+        datasets = [args.dataset]
+
+    sampling_params = []
+    prompts = []
+    data = []
+
+    for dataset in datasets:
+        p, d, maxlen = load_longbench_data(
+            dataset,
+            tokenizer,
+            n_sample=args.n_sample,
+            system_prompt=args.system_prompt,
+            non_thinking=args.non_thinking,
+        )
+        prompts.extend(p)
+        data.extend(d)
+        if args.max_tokens is not None:
+            maxlen = args.max_tokens
+        sampling_params.extend(
+            [SamplingParams(temperature=args.temperature, max_tokens=maxlen)]
+            * len(p)
+        )
     outputs = llm.generate(prompts, sampling_params)
 
     for d, output in zip(data, outputs):
         d["output"] = output["text"]
         d["output_len"] = len(output["token_ids"])
+
     if args.output_path:
         with open(args.output_path, "w") as f:
             info = {
@@ -87,15 +120,17 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--dataset", type=str, required=True)
+    parser.add_argument("--non_thinking", action="store_true")
+    parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--tensor_parallel_size", type=int, default=1)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_num_batched_tokens", type=int, default=63840)
     parser.add_argument("--output_path", type=str, default=None)
     parser.add_argument("--port", type=int, default=2333)
+    parser.add_argument("--log_interval", type=int, default=2)
     # sampling related
     parser.add_argument("--temperature", type=float, default=0.6)
-    parser.add_argument("--max_tokens", type=int, default=8192)
+    parser.add_argument("--max_tokens", type=int, default=None)
     parser.add_argument("--n_sample", type=int, default=1)
     parser.add_argument("--repetition_penalty", type=float, default=1.0)
     # dataset related
