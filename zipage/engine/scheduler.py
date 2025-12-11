@@ -20,7 +20,7 @@ class Scheduler:
         )
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
-        self.free_seq_ids: deque[int] = deque(range(config.max_num_seqs))
+        self.free_seq_ids: deque[int] = deque(range(config.max_concurrency))
         self.used_seq_ids: set[int] = set()
         self.enable_hybrid_engine = config.enable_hybrid_engine
         self.strict_max_blocks = config.strict_max_blocks
@@ -46,7 +46,7 @@ class Scheduler:
         # prefill
         prefilling_seqs = []
         num_batched_tokens = 0
-        while self.waiting:
+        while self.waiting and len(prefilling_seqs) < self.max_num_seqs:
             seq = self.waiting[0]
             if num_batched_tokens + len(
                 seq
@@ -74,7 +74,7 @@ class Scheduler:
         # decode
         running_seqs = []
         decoding_and_compressing_seqs = []
-        while self.running:
+        while self.running and len(decoding_and_compressing_seqs) < self.max_num_seqs:
             seq = self.running.popleft()
             if seq.seq_id == -1 and len(self.free_seq_ids) > 0:
                 self._allocate_seq_id(seq)

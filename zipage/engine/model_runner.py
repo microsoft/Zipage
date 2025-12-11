@@ -44,6 +44,7 @@ class ModelRunner:
         self.use_global_score = config.use_global_score
         self.max_norm = config.max_norm
         self.decay_factor = config.decay_factor
+        self.score_cache=None
 
         self.use_similarity = config.use_similarity
         self.lightning_similarity = config.lightning_similarity
@@ -157,7 +158,7 @@ class ModelRunner:
             hf_config.num_hidden_layers
             * self.block_size
             * num_kv_heads
-            * (2 * hf_config.head_dim + 1)
+            * (2 * hf_config.head_dim + self.use_global_score)
             * hf_config.torch_dtype.itemsize
         )
 
@@ -175,13 +176,13 @@ class ModelRunner:
 
         assert config.num_kvcache_blocks > 0
 
-        config.max_num_seqs = min(
+        config.max_concurrency = min(
             config.max_num_seqs, config.num_kvcache_blocks // max_block_perseq
         )
 
         self.query_cache = torch.empty(
             hf_config.num_hidden_layers,
-            config.max_num_seqs,
+            config.max_concurrency,
             query_cache_len,
             hf_config.num_attention_heads,
             hf_config.head_dim,
@@ -196,12 +197,13 @@ class ModelRunner:
             num_kv_heads,
             hf_config.head_dim,
         )
-        self.score_cache = torch.empty(
-            hf_config.num_hidden_layers,
-            config.num_kvcache_blocks,
-            self.block_size,
-            num_kv_heads,
-        )
+        if self.use_global_score:
+            self.score_cache = torch.empty(
+                hf_config.num_hidden_layers,
+                config.num_kvcache_blocks,
+                self.block_size,
+                num_kv_heads,
+            )
 
         layer_id = 0
         for module in self.model.modules():
@@ -209,7 +211,6 @@ class ModelRunner:
                 module.k_cache = self.kv_cache[0, layer_id]
                 module.v_cache = self.kv_cache[1, layer_id]
                 module.q_cache = self.query_cache[layer_id]
-                module.score_cache = self.score_cache[layer_id]
                 layer_id += 1
 
     def prepare_block_tables(self, seqs: list[Sequence]):
