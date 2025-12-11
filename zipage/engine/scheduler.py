@@ -24,8 +24,6 @@ class Scheduler:
         self.used_seq_ids: set[int] = set()
         self.enable_hybrid_engine = config.enable_hybrid_engine
         self.strict_max_blocks = config.strict_max_blocks
-        self.seq_id_lock = threading.Lock()
-        self.seq_lock = threading.Lock()
 
     def is_finished(self):
         return not self.waiting and not self.running
@@ -34,17 +32,15 @@ class Scheduler:
         self.waiting.append(seq)
 
     def _allocate_seq_id(self, seq: Sequence):
-        with self.seq_id_lock:
-            seq_id = self.free_seq_ids.popleft()
-            self.used_seq_ids.add(seq_id)
-            seq.seq_id = seq_id
+        seq_id = self.free_seq_ids.popleft()
+        self.used_seq_ids.add(seq_id)
+        seq.seq_id = seq_id
 
     def _deallocate_seq_id(self, seq: Sequence):
-        with self.seq_id_lock:
-            if seq.seq_id != -1:
-                self.used_seq_ids.remove(seq.seq_id)
-                self.free_seq_ids.append(seq.seq_id)
-                seq.seq_id = -1
+        if seq.seq_id != -1:
+            self.used_seq_ids.remove(seq.seq_id)
+            self.free_seq_ids.append(seq.seq_id)
+            seq.seq_id = -1
 
     def schedule(self) -> tuple[list[Sequence], bool]:
         # prefill
@@ -60,7 +56,7 @@ class Scheduler:
                 if not self.enable_hybrid_engine:
                     break
                 if (
-                    seq.num_blocks > self.block_manager.max_blocks_per_seq
+                    seq.num_blocks >= self.block_manager.max_blocks_per_seq
                     and self.strict_max_blocks
                 ):
                     break
@@ -70,48 +66,55 @@ class Scheduler:
             num_batched_tokens += len(seq) - seq.num_cached_tokens
             seq.status = SequenceStatus.RUNNING
             self.waiting.popleft()
-            with self.seq_lock:
-                self.running.append(seq)
+            self.running.append(seq)
             prefilling_seqs.append(seq)
         if prefilling_seqs:
             return prefilling_seqs, True
 
         # decode
+        running_seqs = []
         decoding_and_compressing_seqs = []
-        with self.seq_lock:
-            seq_to_preempt = []
-            if not self.enable_hybrid_engine:
-                for seq in self.running:
-                    if self.block_manager.can_append_or_compress(seq, True):
+        while self.running:
+            seq = self.running.popleft()
+            if seq.seq_id == -1 and len(self.free_seq_ids) > 0:
+                self._allocate_seq_id(seq)
+            rejoining_seqs = []
+            if seq.seq_id != -1:
+                while not self.block_manager.can_append_or_compress(
+                    seq, not self.enable_hybrid_engine or self.strict_max_blocks
+                ):
+                    if self.running:
+                        last_seq = self.running.pop()
+                        if not last_seq.compressed:
+                            self.preempt(last_seq)
+                        else:
+                            rejoining_seqs.append(last_seq)
+                    else:
+                        # suspend
+                        running_seqs.append(seq)
+                        break
+                else:
+                    self.block_manager.may_append(seq)
+                    running_seqs.append(seq)
+                    decoding_and_compressing_seqs.append(seq)
+            else:
+                condition = self.block_manager.can_append(seq, self.strict_max_blocks)
+                while condition == -1:
+                    if self.running:
+                        self.preempt(self.running.pop())
+                    else:
+                        running_seqs.append(seq)
+                        break
+                    condition = self.block_manager.can_append(
+                        seq, self.strict_max_blocks
+                    )
+                else:
+                    running_seqs.append(seq)
+                    if  condition == 1:
                         self.block_manager.may_append(seq)
                         decoding_and_compressing_seqs.append(seq)
-                    else:
-                        assert not seq.compressed
-                        self.preempt(seq)
-                        seq_to_preempt.append(seq)
-            else:
-                for seq in self.running:
-                    if seq.seq_id == -1 and len(self.free_seq_ids) > 0:
-                        self._allocate_seq_id(seq)
-                    if seq.seq_id != -1:
-                        if self.block_manager.can_append_or_compress(
-                            seq, self.strict_max_blocks
-                        ):
-                            self.block_manager.may_append(seq)
-                            decoding_and_compressing_seqs.append(seq)
-                        else:
-                            assert not seq.compressed
-                            self.preempt(seq)
-                            seq_to_preempt.append(seq)
-                    else:
-                        if self.block_manager.can_append(seq, self.strict_max_blocks):
-                            self.block_manager.may_append(seq)
-                            decoding_and_compressing_seqs.append(seq)
-                        else:
-                            self.preempt(seq)
-                            seq_to_preempt.append(seq)
-            for seq in seq_to_preempt:
-                self.running.remove(seq)
+            self.running.extend(reversed(rejoining_seqs))
+        self.running.extendleft(reversed(running_seqs))
         return decoding_and_compressing_seqs, False
 
     def preempt(self, seq: Sequence):
@@ -146,6 +149,5 @@ class Scheduler:
                 ) or seq.num_completion_tokens == seq.max_tokens:
                     seq.status = SequenceStatus.FINISHED
                     self.block_manager.deallocate(seq)
-                    with self.seq_lock:
-                        self.running.remove(seq)
+                    self.running.remove(seq)
                     self._deallocate_seq_id(seq)

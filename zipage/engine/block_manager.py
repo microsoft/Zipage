@@ -133,7 +133,7 @@ class BlockManager:
         seq.block_table.clear()
 
     def deallocate_block_to_release(self, seq: Sequence):
-        self.deallocate_blocks(seq.block_to_release)
+        self.deallocate_blocks(reversed(seq.block_to_release))
         seq.block_to_release = None
 
     def may_compress(self, seq: Sequence) -> bool:
@@ -200,16 +200,13 @@ class BlockManager:
                         return self.may_compress(seq)
         return True
 
-    def can_append(self, seq: Sequence, strict: bool = False):
+    def can_append(self, seq: Sequence, strict: bool = False) -> int:
         if len(seq) % self.block_size == 1:
-            if strict:
-                return (
-                    len(self.free_block_ids) > 0
-                    and len(seq.block_table) < self.max_blocks_per_seq - 1
-                )
-            else:
-                return len(self.free_block_ids) > 0
-        return True
+            if strict and not (len(seq.block_table) < self.max_blocks_per_seq - 1):
+                return 0
+            if len(self.free_block_ids) == 0:
+                return -1
+        return 1
 
     def may_append(self, seq: Sequence):
         if len(seq) % self.block_size == 1 and (
