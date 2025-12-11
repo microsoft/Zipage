@@ -1,7 +1,7 @@
 import os
 import json
 from transformers import AutoTokenizer
-from utils.math_dataloader import load_math_data
+from .dataloader.math_dataloader import load_math_data
 
 
 def main(args):

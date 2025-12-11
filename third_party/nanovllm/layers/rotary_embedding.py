@@ -2,7 +2,6 @@ from functools import lru_cache
 import torch
 from torch import nn
 
-
 def apply_rotary_emb(
     x: torch.Tensor,
     cos: torch.Tensor,

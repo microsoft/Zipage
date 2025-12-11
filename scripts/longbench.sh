@@ -8,7 +8,7 @@ MODEL="/local_nvme/liaomengqi/hugingface/hub/models--Qwen--Qwen3-8B/snapshots/b9
 DATASET_NAME="multifieldqa_en"
 
 
-CUDA_VISIBLE_DEVICES=2 python -m bench.longbench_main \
+CUDA_VISIBLE_DEVICES=2 python -m examples.longbench_main \
     --model_path $MODEL \
     --dataset $DATASET_NAME \
     --temperature 0.6 \

@@ -1,7 +1,7 @@
 import os
 import json
 from transformers import AutoTokenizer
-from utils.longbench_dataloader import load_longbench_data
+from .dataloader.longbench_dataloader import load_longbench_data
 
 
 def main(args):

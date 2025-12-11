@@ -98,7 +98,7 @@ def load_longbench_data(
 ):
     assert dataset_name in LONGBENCH_DATA_LIST
 
-    path = "./bench/longbench/data/"
+    path = "datasets/longbench/data/"
     try:
         dataset = load_dataset(
             "json",
@@ -107,7 +107,7 @@ def load_longbench_data(
         )
     except Exception as e:
         raise Exception(
-            f"Error loading dataset {dataset_name}, please run ./bench/longbench_process.py to download the data"
+            f"Error loading dataset {dataset_name}, please run ./examples/longbench_process.py to download the data"
         )
 
     prompts = []

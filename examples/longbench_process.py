@@ -1,0 +1,17 @@
+from huggingface_hub import snapshot_download
+import os
+import zipfile
+
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+datasets_dir = os.path.join(project_root, "datasets", "longbench")
+
+os.makedirs(datasets_dir, exist_ok=True)
+
+dataset_path = snapshot_download(
+    repo_id="THUDM/LongBench", repo_type="dataset", local_dir=datasets_dir
+)
+
+data_zip_path = os.path.join(datasets_dir, "data.zip")
+
+with zipfile.ZipFile(data_zip_path, "r") as zip_ref:
+    zip_ref.extractall(datasets_dir)

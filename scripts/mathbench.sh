@@ -9,7 +9,7 @@ DATASET_PATH="juanlrdc/gmsk8"
 DATASET_PATH="zwhe99/amc23"
 
 
-CUDA_VISIBLE_DEVICES=0 python -m bench.mathbench_main \
+CUDA_VISIBLE_DEVICES=0 python -m examples.mathbench_main \
     --model_path $MODEL \
     --dataset $DATASET_PATH \
     --system_prompt  "Please reason step by step, and put your final answer within \\boxed{}." \
@@ -31,5 +31,4 @@ CUDA_VISIBLE_DEVICES=0 python -m bench.mathbench_main \
     --decay_factor 0.8 \
     --enable_pooling \
     --layer_stride 8 \
-    --compress \
     --output_path outputs/test_qwen8b_zipage_amc23.json
