@@ -23,6 +23,7 @@ class Sequence:
         self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = len(token_ids)
         self.num_cached_tokens = 0
+        self.prefilled = False
         self.block_table = []
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
@@ -70,11 +71,15 @@ class Sequence:
         self.token_ids.append(token_id)
         self.last_token = token_id
         self.num_tokens += 1
+        self.prefilled = True
 
     def __getstate__(self):
-        return (self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.block_table,
-                self.token_ids)
+        return (self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.block_table,self.prefilled,
+                self.last_token if self.prefilled else self.token_ids)
 
     def __setstate__(self, state):
-        self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.block_table,self.token_ids = state
-        self.last_token = self.token_ids[-1]
+        self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.block_table,self.prefilled = state[:-1]
+        if self.prefilled:
+            self.last_token = state[-1]
+        else:
+            self.token_ids = state[-1]
