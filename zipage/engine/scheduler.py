@@ -87,7 +87,7 @@ class Scheduler:
                 ):
                     if self.running and self.enable_hybrid_engine:
                         last_seq = self.running.pop()
-                        if not last_seq.compressed:
+                        if not (last_seq.compressed or last_seq.require_compress):
                             self.preempt(last_seq)
                         else:
                             rejoining_seqs.append(last_seq)
