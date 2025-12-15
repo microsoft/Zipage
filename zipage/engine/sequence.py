@@ -25,15 +25,14 @@ class Sequence:
         self.num_prompt_tokens = len(token_ids)
         self.num_cached_tokens = 0
         self.block_table = []
-        self.new_block_table: Optional[List[int]] = None
-        self.block_to_release: Optional[List[int]] = None
+        self.new_block_table = []
+        self.block_to_release = []
         self.require_compress = False
         self.compressed = False
+        self.prefilled = False
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
-        self.last_token_entropy = 0
-        self.query_entropy_list = []
 
     def __len__(self):
         return self.num_tokens
@@ -72,7 +71,7 @@ class Sequence:
     @property
     def num_cached_blocks(self):
         return self.num_cached_tokens // self.block_size
-        
+
     def block(self, i):
         assert 0 <= i < self.num_blocks
         return self.token_ids[i * self.block_size : (i + 1) * self.block_size]
@@ -88,6 +87,7 @@ class Sequence:
         self.last_token = token_id
         self.num_tokens += 1
         self.num_cached_tokens += 1
+        self.prefilled = True
 
     def __getstate__(self):
         return (
@@ -95,7 +95,11 @@ class Sequence:
             self.num_prompt_tokens,
             self.num_cached_tokens,
             self.block_table,
-            self.token_ids if self.num_completion_tokens == 0 else self.last_token,
+            self.prefilled,
+            self.new_block_table,
+            self.compressed,
+            self.seq_id,
+            self.last_token if self.prefilled else self.token_ids,
         )
 
     def __setstate__(self, state):
@@ -104,8 +108,12 @@ class Sequence:
             self.num_prompt_tokens,
             self.num_cached_tokens,
             self.block_table,
+            self.prefilled,
+            self.new_block_table,
+            self.compressed,
+            self.seq_id,
         ) = state[:-1]
-        if self.num_completion_tokens == 0:
-            self.token_ids = state[-1]
-        else:
+        if self.prefilled:
             self.last_token = state[-1]
+        else:
+            self.token_ids = state[-1]

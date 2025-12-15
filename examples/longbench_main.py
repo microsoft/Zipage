@@ -113,6 +113,7 @@ def main(args):
                     if key.endswith("_sum"):
                         info[key] = llm.model_runner.time_record[key]
             json.dump(info, f)
+    llm.exit()
 
 
 if __name__ == "__main__":

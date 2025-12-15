@@ -23,16 +23,32 @@ class LLMEngine:
         config = Config(model, **config_kwargs)
         self.ps = []
         self.events = []
+        self.compress_events = []
+        self.compress_done_events = []
         ctx = mp.get_context("spawn")
+        port = kwargs.get("port", 2333)
         for i in range(1, config.tensor_parallel_size):
             event = ctx.Event()
-            process = ctx.Process(target=ModelRunner, args=(config, i, event))
+            compress_event = ctx.Event()
+            compress_done_event = ctx.Event()
+            process = ctx.Process(
+                target=ModelRunner,
+                args=(config, i, event, compress_event, compress_done_event, port),
+            )
             process.start()
             self.ps.append(process)
             self.events.append(event)
+            self.compress_events.append(compress_event)
+            self.compress_done_events.append(compress_done_event)
 
-        port = kwargs.get("port", 2333)
-        self.model_runner = ModelRunner(config, 0, self.events, port)
+        self.model_runner = ModelRunner(
+            config,
+            0,
+            self.events,
+            self.compress_events,
+            self.compress_done_events,
+            port,
+        )
         self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
         config.eos = self.tokenizer.eos_token_id
         config.pad = self.tokenizer.pad_token_id
@@ -77,8 +93,8 @@ class LLMEngine:
         self.compress_task_event.clear()
 
     def _run_task(self, run_seqs: list[Sequence], is_prefill: bool):
-        token_ids, entropy = self.model_runner.call("run", run_seqs, is_prefill)
-        self.scheduler.postprocess(run_seqs, token_ids, entropy)
+        token_ids = self.model_runner.call("run", run_seqs, is_prefill)
+        self.scheduler.postprocess(run_seqs, token_ids)
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
@@ -96,8 +112,8 @@ class LLMEngine:
             self.time_record["compress_reqs"] = len(compress_seqs)
             self.time_record["decode_reqs"] = len(seqs)
         start_time = perf_counter()
-        token_ids, entropy = self.model_runner.call("run", seqs, is_prefill)
-        self.scheduler.postprocess(seqs, token_ids, entropy)
+        token_ids = self.model_runner.call("run", seqs, is_prefill)
+        self.scheduler.postprocess(seqs, token_ids)
         end_time = perf_counter()
         if is_prefill:
             self.time_record["prefill"] = end_time - start_time
@@ -188,12 +204,16 @@ class LLMEngine:
 
         for key in self.time_record:
             if not key.endswith("_sum"):
-                if (not key in self.logger) or (self.logger[key][-1]!=self.time_record[key]):
+                if (not key in self.logger) or (
+                    self.logger[key][-1] != self.time_record[key]
+                ):
                     self.logger[key].append(self.time_record[key])
 
         for key in self.model_runner.time_record:
             if not key.endswith("_sum"):
-                if (not key in self.logger) or (self.logger[key][-1]!=self.model_runner.time_record[key]):
+                if (not key in self.logger) or (
+                    self.logger[key][-1] != self.model_runner.time_record[key]
+                ):
                     self.logger[key].append(self.model_runner.time_record[key])
 
     def log_step(self, time_from_start, running_seqs, waiting_seqs, decode_throughput):

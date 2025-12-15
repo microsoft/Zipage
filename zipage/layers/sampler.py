@@ -35,7 +35,6 @@ class Sampler(nn.Module):
         logits: torch.Tensor,
         temperatures: torch.Tensor,
         past_tokens: torch.Tensor = None,
-        return_entropy: bool = False,
     ):
         """
         logits: [batch, vocab_size]
@@ -46,8 +45,5 @@ class Sampler(nn.Module):
             if past_tokens.numel() > 0:
                 logits = self.repetition_penalty_processor(past_tokens, logits)
         probs = self.calculate_probs(logits, temperatures)
-        entropy = None
-        if return_entropy:
-            entropy = self.calculate_entropy(probs).tolist()
         sample_tokens = self.sample(probs)
-        return sample_tokens, entropy
+        return sample_tokens

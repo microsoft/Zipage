@@ -51,6 +51,7 @@ def main(args):
             gpu_memory_utilization=args.gpu_memory_utilization,
             max_num_batched_tokens=args.max_num_batched_tokens,
             enable_log=True,
+            port=args.port,
         )
     sampling_params = SamplingParams(temperature=args.temperature, max_tokens=args.max_tokens)
 
@@ -80,6 +81,7 @@ def main(args):
                     if key.endswith("_sum"):
                         info[key] = llm.model_runner.time_record[key]
             json.dump(info, f)
+    llm.exit()
 
 
 if __name__ == "__main__":

@@ -3,9 +3,11 @@ import torch
 import torch.distributed as dist
 from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
+import threading
 
 from time import perf_counter
 from collections import defaultdict
+
 
 from zipage.layers.sampler import Sampler
 from zipage.config import Config
@@ -28,7 +30,13 @@ import torch.nn.functional as F
 class ModelRunner:
 
     def __init__(
-        self, config: Config, rank: int, event: Event | list[Event], port: int = 2333
+        self,
+        config: Config,
+        rank: int,
+        event: Event | list[Event],
+        compress_event: Event | list[Event],
+        compress_done_event: Event | list[Event],
+        port: int = 2333,
     ):
         self.config = config
         hf_config = config.hf_config
@@ -38,6 +46,8 @@ class ModelRunner:
         self.world_size = config.tensor_parallel_size
         self.rank = rank
         self.event = event
+        self.compress_event = compress_event
+        self.compress_done_event = compress_done_event
 
         self.query_cache_len = config.query_cache_len
 
@@ -83,53 +93,109 @@ class ModelRunner:
 
         if self.world_size > 1:
             if rank == 0:
-                self.shm = SharedMemory(name="nanovllm", create=True, size=2**20)
+                self.shm = SharedMemory(name="zipage", create=True, size=2**20)
+                self.compress_shm = SharedMemory(
+                    name="compress", create=True, size=2**20
+                )
                 dist.barrier()
             else:
                 dist.barrier()
-                self.shm = SharedMemory(name="nanovllm")
+                self.shm = SharedMemory(name="zipage")
+                self.compress_shm = SharedMemory(name="compress")
                 self.loop()
 
     def exit(self):
         if self.world_size > 1:
             self.shm.close()
+            self.compress_shm.close()
             dist.barrier()
             if self.rank == 0:
                 self.shm.unlink()
+                self.compress_shm.unlink()
         if not self.enforce_eager:
             del self.graphs, self.graph_pool
         torch.cuda.synchronize()
         dist.destroy_process_group()
 
-    def loop(self):
+    def run_loop(self):
+        torch.cuda.set_device(self.rank)
         while True:
             method_name, args = self.read_shm()
             self.call(method_name, *args)
             if method_name == "exit":
                 break
 
-    def read_shm(self):
+    def compress_loop(self):
+        torch.cuda.set_device(self.rank)
+        while True:
+            method_name, args = self.read_shm(True)
+            if method_name == "exit":
+                self.compress_done_event.set()
+                break
+            self.call("compress", *args)
+            self.compress_done_event.set()
+
+    def loop(self):
+        run_thread = threading.Thread(target=self.run_loop)
+        compress_thread = threading.Thread(target=self.compress_loop)
+        run_thread.start()
+        compress_thread.start()
+        compress_thread.join()
+        run_thread.join()
+
+    def read_shm(self, is_compress: bool = False):
         assert self.world_size > 1 and self.rank > 0
-        self.event.wait()
-        n = int.from_bytes(self.shm.buf[0:4], "little")
-        method_name, *args = pickle.loads(self.shm.buf[4 : n + 4])
-        self.event.clear()
+        if not is_compress:
+            self.event.wait()
+            n = int.from_bytes(self.shm.buf[0:4], "little")
+            method_name, *args = pickle.loads(self.shm.buf[4 : n + 4])
+            self.event.clear()
+        else:
+            self.compress_event.wait()
+            n = int.from_bytes(self.compress_shm.buf[0:4], "little")
+            method_name, *args = pickle.loads(self.compress_shm.buf[4 : n + 4])
+            self.compress_event.clear()
         return method_name, args
 
     def write_shm(self, method_name, *args):
         assert self.world_size > 1 and self.rank == 0
         data = pickle.dumps([method_name, *args])
         n = len(data)
-        self.shm.buf[0:4] = n.to_bytes(4, "little")
-        self.shm.buf[4 : n + 4] = data
-        for event in self.event:
-            event.set()
+        if method_name == "run":
+            self.shm.buf[0:4] = n.to_bytes(4, "little")
+            self.shm.buf[4 : n + 4] = data
+            for event in self.event:
+                event.set()
+        elif method_name == "compress":
+            self.compress_shm.buf[0:4] = n.to_bytes(4, "little")
+            self.compress_shm.buf[4 : n + 4] = data
+            for event in self.compress_event:
+                event.set()
+        else:
+            # exit
+            self.compress_shm.buf[0:4] = n.to_bytes(4, "little")
+            self.compress_shm.buf[4 : n + 4] = data
+            for event in self.compress_event:
+                event.set()
+            for event in self.compress_done_event:
+                event.wait()
+                event.clear()
+            self.shm.buf[0:4] = n.to_bytes(4, "little")
+            self.shm.buf[4 : n + 4] = data
+            for event in self.event:
+                event.set()
 
     def call(self, method_name, *args):
         if self.world_size > 1 and self.rank == 0:
             self.write_shm(method_name, *args)
         method = getattr(self, method_name, None)
-        return method(*args)
+        res = method(*args)
+
+        if self.world_size > 1 and self.rank == 0 and method_name == "compress":
+            for event in self.compress_done_event:
+                event.wait()
+                event.clear()
+        return res
 
     def warmup_model(self):
         torch.cuda.empty_cache()
@@ -153,6 +219,9 @@ class ModelRunner:
         peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
         num_kv_heads = hf_config.num_key_value_heads // self.world_size
+        
+        assert hf_config.num_attention_heads % self.world_size == 0
+        num_q_heads = hf_config.num_attention_heads // self.world_size
 
         block_bytes = (
             hf_config.num_hidden_layers
@@ -165,7 +234,7 @@ class ModelRunner:
         query_cache_bytes = (
             hf_config.num_hidden_layers
             * query_cache_len
-            * hf_config.num_attention_heads
+            * num_q_heads
             * hf_config.head_dim
             * hf_config.torch_dtype.itemsize
         )
@@ -188,7 +257,7 @@ class ModelRunner:
             hf_config.num_hidden_layers,
             config.max_concurrency,
             query_cache_len,
-            hf_config.num_attention_heads,
+            num_q_heads,
             hf_config.head_dim,
         )
 
@@ -338,7 +407,6 @@ class ModelRunner:
         compressed = []
         target_block_tables = []
         for seq in seqs:
-            assert seq.require_compress
             seq_ids.append(seq.seq_id)
             max_len_block_table = max(max_len_block_table, len(seq.block_table))
             # < 0 and !=-1 means the last block
@@ -638,18 +706,17 @@ class ModelRunner:
             self.prepare_sample(seqs) if self.rank == 0 else (None, None)
         )
         logits = self.run_model(input_ids, positions, is_prefill)
-        token_ids, entropy = (
+        token_ids = (
             self.sampler(
                 logits,
                 temperatures,
                 recent_token_ids,
-            )
+            ).tolist()
             if self.rank == 0
-            else (None, None)
+            else None
         )
-        token_ids = token_ids.tolist()
         reset_context()
-        return token_ids, entropy
+        return token_ids
 
     @torch.inference_mode()
     def capture_cudagraph(self):

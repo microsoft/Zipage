@@ -130,11 +130,12 @@ class BlockManager:
     def deallocate(self, seq: Sequence):
         self.deallocate_blocks(reversed(seq.block_table))
         seq.num_cached_tokens = 0
+        seq.prefilled = False
         seq.block_table.clear()
 
     def deallocate_block_to_release(self, seq: Sequence):
         self.deallocate_blocks(reversed(seq.block_to_release))
-        seq.block_to_release = None
+        seq.block_to_release.clear()
 
     def may_compress(self, seq: Sequence) -> bool:
         if seq.compressed:
@@ -142,7 +143,7 @@ class BlockManager:
             if len(seq.block_table) > self.max_blocks_per_seq:
                 seq.block_to_release = seq.block_table[self.max_blocks_per_seq :]
             else:
-                seq.block_to_release = []
+                seq.block_to_release.clear()
             seq.require_compress = True
         else:
             # preserve share prefix
@@ -161,7 +162,7 @@ class BlockManager:
             if num_new_blocks > len(self.free_block_ids):
                 return False
             # new block table after compression
-            seq.new_block_table = []
+            seq.new_block_table=[]
             for _ in range(num_new_blocks):
                 block_id = self._allocate_block()
                 seq.new_block_table.append(block_id)

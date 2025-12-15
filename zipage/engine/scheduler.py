@@ -135,15 +135,12 @@ class Scheduler:
         self,
         seqs: list[Sequence],
         token_ids: Optional[list[int]] = None,
-        entropies: Optional[list[float]] = None,
     ) -> list[bool]:
         for seq in seqs:
-            if entropies is not None:
-                seq.last_token_entropy = entropies.pop(0)
             if seq.require_compress:
                 self.block_manager.deallocate_block_to_release(seq)
                 seq.block_table = seq.new_block_table
-                seq.new_block_table = None
+                seq.new_block_table = []
                 seq.num_cached_tokens = (
                     len(seq.block_table) - 1
                 ) * self.block_manager.block_size + 1
