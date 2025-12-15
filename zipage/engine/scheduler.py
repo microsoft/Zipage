@@ -24,6 +24,8 @@ class Scheduler:
         self.used_seq_ids: set[int] = set()
         self.enable_hybrid_engine = config.enable_hybrid_engine
         self.strict_max_blocks = config.strict_max_blocks
+        self.query_cache_len = config.query_cache_len
+        self.block_size = self.block_manager.block_size
 
     def is_finished(self):
         return not self.waiting and not self.running
@@ -76,14 +78,14 @@ class Scheduler:
         decoding_and_compressing_seqs = []
         while self.running and len(decoding_and_compressing_seqs) < self.max_num_seqs:
             seq = self.running.popleft()
-            if seq.seq_id == -1 and len(self.free_seq_ids) > 0:
+            if seq.seq_id == -1 and self.can_allocate_seq_id(seq):
                 self._allocate_seq_id(seq)
             rejoining_seqs = []
             if seq.seq_id != -1:
                 while not self.block_manager.can_append_or_compress(
                     seq, not self.enable_hybrid_engine or self.strict_max_blocks
                 ):
-                    if self.running:
+                    if self.running and self.enable_hybrid_engine:
                         last_seq = self.running.pop()
                         if not last_seq.compressed:
                             self.preempt(last_seq)
@@ -110,12 +112,18 @@ class Scheduler:
                     )
                 else:
                     running_seqs.append(seq)
-                    if  condition == 1:
+                    if condition == 1:
                         self.block_manager.may_append(seq)
                         decoding_and_compressing_seqs.append(seq)
             self.running.extend(reversed(rejoining_seqs))
         self.running.extendleft(reversed(running_seqs))
         return decoding_and_compressing_seqs, False
+
+    def can_allocate_seq_id(self, seq: Sequence) -> bool:
+        return len(self.free_seq_ids) > 0 and (
+            len(seq.block_table) < self.block_manager.max_blocks_per_seq
+            or seq.last_block_num_tokens <= self.block_size - self.query_cache_len + 1
+        )
 
     def preempt(self, seq: Sequence):
         seq.status = SequenceStatus.WAITING

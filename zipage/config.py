@@ -7,7 +7,7 @@ from transformers import AutoConfig
 class Config:
     model: str
     max_num_batched_tokens: int = 63840
-    max_num_seqs: int = 1024
+    max_num_seqs: int = 512
     max_concurrency:int = -1
     max_model_len: int = 4096
     gpu_memory_utilization: float = 0.9
@@ -55,3 +55,5 @@ class Config:
         assert self.max_num_batched_tokens >= self.max_model_len
         assert self.max_cache_blocks_per_seq >= 1
         assert self.pooling_size % 2 == 1
+        if self.enable_prefix_cache:
+            assert self.enable_hybrid_engine, "shared prefix must combine with hybrid engine"
