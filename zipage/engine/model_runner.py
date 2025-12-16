@@ -246,9 +246,21 @@ class ModelRunner:
         )
         config.max_concurrency = min(config.max_num_seqs, max_concurrency)
 
+        if self.world_size > 1:
+            dist.barrier()
+            local_max_conc = torch.tensor([config.max_concurrency], dtype=torch.int32, device="cuda")
+            dist.all_reduce(local_max_conc, op=dist.ReduceOp.MIN)
+            config.max_concurrency = int(local_max_conc.item())
+
         config.num_kvcache_blocks = (
             available_bytes - config.max_concurrency * query_cache_bytes
         ) // block_bytes
+
+        if self.world_size > 1:
+            dist.barrier()
+            local_num_kvcache_blocks = torch.tensor([config.num_kvcache_blocks], dtype=torch.int32, device="cuda")
+            dist.all_reduce(local_num_kvcache_blocks, op=dist.ReduceOp.MIN)
+            config.num_kvcache_blocks = int(local_num_kvcache_blocks.item())
 
         assert config.max_concurrency > 0
         assert config.num_kvcache_blocks > 0

@@ -126,6 +126,11 @@ class ModelRunner:
             int(total * config.gpu_memory_utilization - used - peak + current)
             // block_bytes
         )
+        if self.world_size > 1:
+            dist.barrier()
+            local_num_kvcache_blocks = torch.tensor([config.num_kvcache_blocks], dtype=torch.int32, device="cuda")
+            dist.all_reduce(local_num_kvcache_blocks, op=dist.ReduceOp.MIN)
+            config.num_kvcache_blocks = int(local_num_kvcache_blocks.item())
         assert config.num_kvcache_blocks > 0
         self.kv_cache = torch.empty(
             2,
