@@ -82,6 +82,8 @@ class ModelRunner:
         self.model = AutoModelForCausalLM(hf_config)
         load_model(self.model, config.model)
         self.sampler = Sampler(config.repetition_penalty)
+        self.compress_stream = torch.cuda.Stream()
+        self.run_stream = torch.cuda.Stream()
         self.warmup_model()
         self.allocate_kv_cache()
         if not self.enforce_eager:
@@ -219,7 +221,7 @@ class ModelRunner:
         peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
         num_kv_heads = hf_config.num_key_value_heads // self.world_size
-        
+
         assert hf_config.num_attention_heads % self.world_size == 0
         num_q_heads = hf_config.num_attention_heads // self.world_size
 
@@ -248,7 +250,9 @@ class ModelRunner:
 
         if self.world_size > 1:
             dist.barrier()
-            local_max_conc = torch.tensor([config.max_concurrency], dtype=torch.int32, device="cuda")
+            local_max_conc = torch.tensor(
+                [config.max_concurrency], dtype=torch.int32, device="cuda"
+            )
             dist.all_reduce(local_max_conc, op=dist.ReduceOp.MIN)
             config.max_concurrency = int(local_max_conc.item())
 
@@ -258,7 +262,9 @@ class ModelRunner:
 
         if self.world_size > 1:
             dist.barrier()
-            local_num_kvcache_blocks = torch.tensor([config.num_kvcache_blocks], dtype=torch.int32, device="cuda")
+            local_num_kvcache_blocks = torch.tensor(
+                [config.num_kvcache_blocks], dtype=torch.int32, device="cuda"
+            )
             dist.all_reduce(local_num_kvcache_blocks, op=dist.ReduceOp.MIN)
             config.num_kvcache_blocks = int(local_num_kvcache_blocks.item())
 
@@ -412,6 +418,12 @@ class ModelRunner:
         return input_ids, positions
 
     def compress(self, seqs: list[Sequence]):
+        def record(name):
+            st = torch.cuda.Event(enable_timing=True)
+            ed = torch.cuda.Event(enable_timing=True)
+            st.record(self.compress_stream)
+            return st, ed, name
+
         # prepare
         max_len_block_table = 0
         block_tables = []
@@ -419,202 +431,207 @@ class ModelRunner:
         compressed = []
         target_block_tables = []
         for seq in seqs:
+            assert seq.seq_id != -1
             seq_ids.append(seq.seq_id)
             max_len_block_table = max(max_len_block_table, len(seq.block_table))
             # < 0 and !=-1 means the last block
             block_tables.append(seq.block_table[:-1] + [-seq.block_table[-1] - 2])
+            for block_id in seq.block_table:
+                assert block_id >= 0
             compressed.append(seq.compressed)
             target_block_tables.append(seq.new_block_table)
+            assert len(seq.new_block_table) == self.max_blocks_per_seq
+            for block_id in seq.new_block_table:
+                assert block_id >= 0
 
-        seq_ids = torch.tensor(seq_ids, dtype=torch.int32, pin_memory=True).cuda(
-            non_blocking=True
-        )
-        compressed = torch.tensor(compressed, dtype=torch.bool, pin_memory=True).cuda(
-            non_blocking=True
-        )
-        target_block_tables = torch.tensor(
-            target_block_tables, dtype=torch.int32, pin_memory=True
-        ).cuda(non_blocking=True)
+        times = []
 
-        for i in range(len(block_tables)):
-            block_tables[i] = block_tables[i] + [-1] * (
-                max_len_block_table - len(block_tables[i])
+        with torch.cuda.stream(self.compress_stream):
+            seq_ids = torch.tensor(seq_ids, dtype=torch.int32, pin_memory=True).cuda(
+                non_blocking=True
             )
-        block_tables = torch.tensor(
-            block_tables, dtype=torch.int32, pin_memory=True
-        ).cuda(non_blocking=True)
-
-        for layer_id in range(0, len(self.model.model.layers), self.layer_stride):
-            k_cache = self.kv_cache[0, layer_id : layer_id + self.layer_stride]
-            v_cache = self.kv_cache[1, layer_id : layer_id + self.layer_stride]
-            query_cache = self.query_cache[layer_id : layer_id + self.layer_stride]
-
-            # attention score
-            start_time = perf_counter()
-            scores = attention_score(k_cache, query_cache, seq_ids, block_tables)
-            end_time = perf_counter()
-
-            num_layers, bsz, num_kv_heads, num_blocks, block_size = scores.shape
-            if num_layers == self.layer_stride:
-                self.time_record["attention_score"] = end_time - start_time
-            self.time_record["attention_score_sum"] += end_time - start_time
-
-            # global score
-            if self.use_global_score:
-                start_time = perf_counter()
-
-                if self.max_norm:
-                    scores = scores.view(num_layers, bsz, num_kv_heads, -1)
-                    scores = scores.div_(scores.max(dim=-1, keepdim=True).values)
-                    scores = scores.view(
-                        num_layers, bsz, num_kv_heads, num_blocks, block_size
-                    )
-
-                scores = global_score(
-                    scores,
-                    self.score_cache[layer_id : layer_id + self.layer_stride],
-                    block_tables,
-                    compressed,
-                    self.decay_factor,
+            compressed = torch.tensor(
+                compressed, dtype=torch.bool, pin_memory=True
+            ).cuda(non_blocking=True)
+            target_block_tables = torch.tensor(
+                target_block_tables, dtype=torch.int32, pin_memory=True
+            ).cuda(non_blocking=True)
+            for i in range(len(block_tables)):
+                block_tables[i] = block_tables[i] + [-1] * (
+                    max_len_block_table - len(block_tables[i])
                 )
-                end_time = perf_counter()
-                if num_layers == self.layer_stride:
-                    self.time_record["global_score"] = end_time - start_time
-                self.time_record["global_score_sum"] += end_time - start_time
+            block_tables = torch.tensor(
+                block_tables, dtype=torch.int32, pin_memory=True
+            ).cuda(non_blocking=True)
 
-            # seqnence dimension max pooling
-            scores = scores.view(num_layers * bsz, num_kv_heads, -1)
-            if self.enable_pooling:
-                if not self.continues_pooling and torch.all(compressed):
-                    pass
-                else:
-                    start_time = perf_counter()
-                    pooledscores = F.max_pool1d(
+            for layer_id in range(0, len(self.model.model.layers), self.layer_stride):
+                k_cache = self.kv_cache[0, layer_id : layer_id + self.layer_stride]
+                v_cache = self.kv_cache[1, layer_id : layer_id + self.layer_stride]
+                query_cache = self.query_cache[layer_id : layer_id + self.layer_stride]
+
+                # attention score
+                st, ed, name = record("attention_score")
+                scores = attention_score(k_cache, query_cache, seq_ids, block_tables)
+                ed.record(self.compress_stream)
+                times.append((name, st, ed))
+
+                num_layers, bsz, num_kv_heads, num_blocks, block_size = scores.shape
+
+                # global score
+                if self.use_global_score:
+                    st, ed, name = record("global_score")
+                    if self.max_norm:
+                        scores = scores.view(num_layers, bsz, num_kv_heads, -1)
+                        scores = scores.div_(scores.max(dim=-1, keepdim=True).values)
+                        scores = scores.view(
+                            num_layers, bsz, num_kv_heads, num_blocks, block_size
+                        )
+                    scores = global_score(
                         scores,
-                        kernel_size=self.pooling_size,
-                        stride=1,
-                        padding=self.pooling_size // 2,
+                        self.score_cache[layer_id : layer_id + self.layer_stride],
+                        block_tables,
+                        compressed,
+                        self.decay_factor,
                     )
-                    if not self.continues_pooling:
-                        compressed_mask = (
-                            compressed.unsqueeze(0)
-                            .expand(num_layers, bsz)
-                            .unsqueeze(-1)
-                            .unsqueeze(-1)
-                        )
-                        compressed_mask = compressed_mask.reshape(
-                            num_layers * bsz, 1, 1
-                        )
+                    ed.record(self.compress_stream)
+                    times.append((name, st, ed))
 
-                        scores = torch.where(
-                            compressed_mask,
+                # seqnence dimension max pooling
+                scores = scores.view(num_layers * bsz, num_kv_heads, -1)
+                if self.enable_pooling:
+                    if not self.continues_pooling and torch.all(compressed):
+                        pass
+                    else:
+                        st, ed, name = record("pooling")
+                        pooledscores = F.max_pool1d(
                             scores,
-                            pooledscores,
+                            kernel_size=self.pooling_size,
+                            stride=1,
+                            padding=self.pooling_size // 2,
+                        )
+                        if not self.continues_pooling:
+                            compressed_mask = (
+                                compressed.unsqueeze(0)
+                                .expand(num_layers, bsz)
+                                .unsqueeze(-1)
+                                .unsqueeze(-1)
+                            )
+                            compressed_mask = compressed_mask.reshape(
+                                num_layers * bsz, 1, 1
+                            )
+
+                            scores = torch.where(
+                                compressed_mask,
+                                scores,
+                                pooledscores,
+                            )
+                        else:
+                            scores = pooledscores
+                        ed.record(self.compress_stream)
+                        times.append((name, st, ed))
+
+                scores = scores.view(
+                    num_layers, bsz, num_kv_heads, num_blocks, block_size
+                )
+
+                # similarity score
+                if self.use_similarity:
+                    st, ed, name = record("similarity_score")
+                    if self.lightning_similarity:
+                        similarity = lightning_similarity_score(
+                            k_cache,
+                            block_tables,
+                            temperature=self.similarity_temperature,
                         )
                     else:
-                        scores = pooledscores
-                    end_time = perf_counter()
-                    if num_layers == self.layer_stride:
-                        self.time_record["pooling"] = end_time - start_time
-                    self.time_record["pooling_sum"] += end_time - start_time
+                        similarity = raw_similarity_score(
+                            k_cache,
+                            block_tables,
+                            temperature=self.similarity_temperature,
+                        )
+                    if self.use_global_score and self.max_norm:
+                        similarity = similarity.view(num_layers, bsz, num_kv_heads, -1)
+                        similarity = similarity.div_(
+                            similarity.max(dim=-1, keepdim=True).values
+                        )
+                        similarity = similarity.reshape(
+                            num_layers, bsz, num_kv_heads, num_blocks, block_size
+                        )
+                    scores = scores * self.similarity_lambda - similarity * (
+                        1 - self.similarity_lambda
+                    )
+                    ed.record(self.compress_stream)
+                    times.append((name, st, ed))
 
-            scores = scores.view(num_layers, bsz, num_kv_heads, num_blocks, block_size)
+                # attention sink
+                if self.use_attention_sink:
+                    st, ed, name = record("attention_sink")
+                    scores = scores.view(num_layers, bsz, num_kv_heads, -1)
+                    mask = (
+                        torch.arange(block_size * num_blocks, device=scores.device)
+                        .unsqueeze(0)
+                        .unsqueeze(0)
+                        .unsqueeze(0)
+                        < self.sink_len
+                    )
+                    scores = scores.masked_fill_(mask, float("inf"))
+                    ed.record(self.compress_stream)
+                    times.append((name, st, ed))
 
-            # similarity score
-            if self.use_similarity:
-                start_time = perf_counter()
-                if self.lightning_similarity:
-                    similarity = lightning_similarity_score(
-                        k_cache,
-                        block_tables,
-                        temperature=self.similarity_temperature,
-                    )
-                else:
-                    similarity = raw_similarity_score(
-                        k_cache,
-                        block_tables,
-                        temperature=self.similarity_temperature,
-                    )
-                if self.use_global_score and self.max_norm:
-                    similarity = similarity.view(num_layers, bsz, num_kv_heads, -1)
-                    similarity = similarity.div_(
-                        similarity.max(dim=-1, keepdim=True).values
-                    )
-                    similarity = similarity.reshape(
-                        num_layers, bsz, num_kv_heads, num_blocks, block_size
-                    )
-                scores = scores * self.similarity_lambda - similarity * (
-                    1 - self.similarity_lambda
+                scores = scores.view(
+                    num_layers, bsz, num_kv_heads, num_blocks, block_size
                 )
-                end_time = perf_counter()
-                if num_layers == self.layer_stride:
-                    self.time_record["similarity_score"] = end_time - start_time
-                self.time_record["similarity_score_sum"] += end_time - start_time
 
-            # attention sink
-            if self.use_attention_sink:
-                start_time = perf_counter()
+                # window mask
+                st, ed, name = record("window_mask")
+                scores = window_mask(scores, block_tables, self.query_cache_len)
+                ed.record(self.compress_stream)
+                times.append((name, st, ed))
+
+                # top-k mask
+                st, ed, name = record("topk_mask")
+                mask = (block_tables == -1).unsqueeze(1).unsqueeze(-1).unsqueeze(0)
+                scores = scores.masked_fill_(mask, -float("inf"))
                 scores = scores.view(num_layers, bsz, num_kv_heads, -1)
-                mask = (
-                    torch.arange(block_size * num_blocks, device=scores.device)
-                    .unsqueeze(0)
-                    .unsqueeze(0)
-                    .unsqueeze(0)
-                    < self.sink_len
+                keep_flag = topk_mask(
+                    scores, self.block_size * (self.max_blocks_per_seq - 1)
                 )
-                scores = scores.masked_fill_(mask, float("inf"))
-                end_time = perf_counter()
-                if num_layers == self.layer_stride:
-                    self.time_record["attention_sink"] = end_time - start_time
-                self.time_record["attention_sink_sum"] += end_time - start_time
-
-            scores = scores.view(num_layers, bsz, num_kv_heads, num_blocks, block_size)
-
-            # window mask
-            start_time = perf_counter()
-            scores = window_mask(scores, block_tables, self.query_cache_len)
-            end_time = perf_counter()
-            if num_layers == self.layer_stride:
-                self.time_record["window_mask"] = end_time - start_time
-            self.time_record["window_mask_sum"] += end_time - start_time
-
-            # top-k mask
-            start_time = perf_counter()
-            mask = (block_tables == -1).unsqueeze(1).unsqueeze(-1).unsqueeze(0)
-            scores = scores.masked_fill_(mask, -float("inf"))
-            scores = scores.view(num_layers, bsz, num_kv_heads, -1)
-            keep_flag = topk_mask(
-                scores, self.block_size * (self.max_blocks_per_seq - 1)
-            )
-            keep_flag = keep_flag.view(
-                num_layers, bsz, num_kv_heads, num_blocks, block_size
-            )
-            end_time = perf_counter()
-            if num_layers == self.layer_stride:
-                self.time_record["topk_mask"] = end_time - start_time
-            self.time_record["topk_mask_sum"] += end_time - start_time
-
-            # compress kv
-            start_time = perf_counter()
-            compress_kv(k_cache, v_cache, keep_flag, block_tables, target_block_tables)
-            end_time = perf_counter()
-            if num_layers == self.layer_stride:
-                self.time_record["compress_kv"] = end_time - start_time
-            self.time_record["compress_kv_sum"] += end_time - start_time
-
-            # compress global score
-            if self.use_global_score:
-                start_time = perf_counter()
-                compress_score(
-                    self.score_cache[layer_id : layer_id + self.layer_stride],
-                    keep_flag,
-                    block_tables,
-                    target_block_tables,
+                keep_flag = keep_flag.view(
+                    num_layers, bsz, num_kv_heads, num_blocks, block_size
                 )
-                end_time = perf_counter()
-                if num_layers == self.layer_stride:
-                    self.time_record["global_score"] += end_time - start_time
-                self.time_record["global_score_sum"] += end_time - start_time
+                ed.record(self.compress_stream)
+                times.append((name, st, ed))
+
+                # compress kv
+                st, ed, name = record("compress_kv")
+                compress_kv(
+                    k_cache, v_cache, keep_flag, block_tables, target_block_tables
+                )
+                ed.record(self.compress_stream)
+                times.append((name, st, ed))
+
+                # compress global score
+                if self.use_global_score:
+                    st, ed, name = record("compress_global_score")
+                    compress_score(
+                        self.score_cache[layer_id : layer_id + self.layer_stride],
+                        keep_flag,
+                        block_tables,
+                        target_block_tables,
+                    )
+                    ed.record(self.compress_stream)
+                    times.append((name, st, ed))
+        
+        times[-1][2].synchronize()
+        
+        avg_time=defaultdict(list)
+        for name, st, ed in times:
+            # elapsed_time expects (start, end) and returns milliseconds.
+            t = st.elapsed_time(ed)/1000
+            avg_time[name].append(t)
+            self.time_record[name+'_sum'] += t
+        for name in avg_time:
+            self.time_record[name] = sum(avg_time[name])/len(avg_time[name])
         return seqs
 
     def prepare_decode(self, seqs: list[Sequence]):
@@ -711,23 +728,24 @@ class ModelRunner:
             return self.model.compute_logits(graph_vars["outputs"][:bs])
 
     def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
-        input_ids, positions = (
-            self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
-        )
-        recent_token_ids, temperatures = (
-            self.prepare_sample(seqs) if self.rank == 0 else (None, None)
-        )
-        logits = self.run_model(input_ids, positions, is_prefill)
-        token_ids = (
-            self.sampler(
-                logits,
-                temperatures,
-                recent_token_ids,
-            ).tolist()
-            if self.rank == 0
-            else None
-        )
-        reset_context()
+        with torch.cuda.stream(self.run_stream):
+            input_ids, positions = (
+                self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
+            )
+            recent_token_ids, temperatures = (
+                self.prepare_sample(seqs) if self.rank == 0 else (None, None)
+            )
+            logits = self.run_model(input_ids, positions, is_prefill)
+            token_ids = (
+                self.sampler(
+                    logits,
+                    temperatures,
+                    recent_token_ids,
+                ).tolist()
+                if self.rank == 0
+                else None
+            )
+            reset_context()
         return token_ids
 
     @torch.inference_mode()

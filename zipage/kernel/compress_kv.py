@@ -113,9 +113,9 @@ def compress_kv(
     Arguments:
         key: (num_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim)
         value: (num_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim)
-        flag: (num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
-        block_table: (batch_size, max_num_blocks_per_seq)
-        target_block_table: (batch_size, max_num_blocks_per_seq-2)
+        flag: (num_layers, batch_size, num_kv_heads, num_blocks_per_seq, block_size)
+        block_table: (batch_size, num_blocks_per_seq)
+        target_block_table: (batch_size, max_num_blocks_per_seq)
     """
     BLOCK_D = 128
     num_layers, _, block_size, num_kv_heads, head_dim = key.shape

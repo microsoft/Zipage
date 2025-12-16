@@ -143,7 +143,7 @@ class Scheduler:
                 seq.new_block_table = []
                 seq.num_cached_tokens = (
                     len(seq.block_table) - 1
-                ) * self.block_manager.block_size + 1
+                ) * self.block_size + 1
                 seq.compressed = True
                 seq.require_compress = False
             if token_ids is not None:
