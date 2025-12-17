@@ -327,10 +327,12 @@ class ModelRunner:
         if seq.seq_id == -1:
             return query_slot_mapping
         if is_prefill:
-            if seqlen_q % self.block_size > self.block_size - self.query_cache_len:
-                start = (
-                    (seqlen_q + self.block_size - 1) // self.block_size
-                ) * self.block_size - self.query_cache_len
+            num_blocks = (seqlen_q + self.block_size - 1) // self.block_size
+            if num_blocks == 0:
+                return query_slot_mapping
+            last_block_num_tokens = seqlen_q - (num_blocks - 1) * self.block_size
+            if last_block_num_tokens > self.block_size - self.query_cache_len:
+                start = num_blocks * self.block_size - self.query_cache_len
                 for idx, pos in enumerate(range(start, seqlen_q)):
                     query_slot_mapping.append((cu_len + pos, seq.seq_id, idx))
 
@@ -439,9 +441,6 @@ class ModelRunner:
             block_tables.append(seq.block_table[:-1] + [-seq.block_table[-1] - 2])
             compressed.append(seq.compressed)
             target_block_tables.append(seq.new_block_table)
-            if len(seq.new_block_table) != self.max_blocks_per_seq:
-                print(f"new_block_table: {seq.new_block_table}, block_table: {seq.block_table}")
-                return
 
         times = []
 
