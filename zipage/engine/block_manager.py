@@ -178,7 +178,7 @@ class BlockManager:
             seq.require_compress = True
         return True
 
-    def can_append_or_compress(self, seq: Sequence, strict: bool = False) -> bool:
+    def can_append_or_compress(self, seq: Sequence) -> bool:
         if seq.require_compress:
             # asynchronous compression not finished, this step's compression will be skipped
             return True
@@ -186,27 +186,15 @@ class BlockManager:
         if len(seq) % self.block_size == 1 and (
             seq.num_cached_tokens > self.block_size * len(block_table)
         ):
-            if strict:
-                if len(block_table) < self.max_blocks_per_seq:
-                    if not len(self.free_block_ids) > 0:
-                        return False
-                else:
-                    return self.may_compress(seq)
-            else:
+            if len(block_table) < self.max_blocks_per_seq:
                 if not len(self.free_block_ids) > 0:
-                    if len(block_table) < self.max_blocks_per_seq:
-                        return False
-                    else:
-                        return self.may_compress(seq)
+                    return False
+            else:
+                return self.may_compress(seq)
         return True
 
-    def can_append(self, seq: Sequence, strict: bool = False) -> int:
-        if len(seq) % self.block_size == 1:
-            if strict and not (len(seq.block_table) < self.max_blocks_per_seq - 1):
-                return 0
-            if len(self.free_block_ids) == 0:
-                return -1
-        return 1
+    def can_append(self, seq: Sequence) -> bool:
+        return len(self.free_block_ids) >= (len(seq) % self.block_size == 1)
 
     def may_append(self, seq: Sequence):
         if seq.require_compress:

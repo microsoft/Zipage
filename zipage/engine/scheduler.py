@@ -23,7 +23,6 @@ class Scheduler:
         self.free_seq_ids: deque[int] = deque(range(config.max_concurrency))
         self.used_seq_ids: set[int] = set()
         self.enable_hybrid_engine = config.enable_hybrid_engine
-        self.strict_max_blocks = config.strict_max_blocks
         self.query_cache_len = config.query_cache_len
         self.block_size = self.block_manager.block_size
 
@@ -48,6 +47,16 @@ class Scheduler:
         # prefill
         prefilling_seqs = []
         num_batched_tokens = 0
+
+        if self.enable_hybrid_engine and self.running and self.running[-1].seq_id == -1:
+            running_seqs = []
+            while self.running and len(self.free_seq_ids) > 0:
+                seq = self.running.popleft()
+                running_seqs.append(seq)
+                if seq.seq_id == -1:
+                    self._allocate_seq_id(seq)
+            self.running.extendleft(reversed(running_seqs))
+
         while self.waiting and len(prefilling_seqs) < self.max_num_seqs:
             seq = self.waiting[0]
             if num_batched_tokens + len(
@@ -57,10 +66,7 @@ class Scheduler:
             if len(self.free_seq_ids) == 0:
                 if not self.enable_hybrid_engine:
                     break
-                if (
-                    seq.num_blocks >= self.block_manager.max_blocks_per_seq
-                    and self.strict_max_blocks
-                ):
+                if not self.can_decode_without_seq_id(seq):
                     break
             if len(self.free_seq_ids) > 0:
                 self._allocate_seq_id(seq)
@@ -78,13 +84,9 @@ class Scheduler:
         decoding_and_compressing_seqs = []
         while self.running and len(decoding_and_compressing_seqs) < self.max_num_seqs:
             seq = self.running.popleft()
-            if seq.seq_id == -1 and self.can_allocate_seq_id(seq):
-                self._allocate_seq_id(seq)
             rejoining_seqs = []
             if seq.seq_id != -1:
-                while not self.block_manager.can_append_or_compress(
-                    seq, (not self.enable_hybrid_engine) or self.strict_max_blocks
-                ):
+                while not self.block_manager.can_append_or_compress(seq):
                     if self.running and self.enable_hybrid_engine:
                         last_seq = self.running.pop()
                         if not (last_seq.compressed or last_seq.require_compress):
@@ -100,26 +102,29 @@ class Scheduler:
                     running_seqs.append(seq)
                     decoding_and_compressing_seqs.append(seq)
             else:
-                condition = self.block_manager.can_append(seq, self.strict_max_blocks)
-                while condition == -1:
+                not_blocking =  self.can_decode_without_seq_id(seq)
+                while not_blocking and not self.block_manager.can_append(seq):
                     if self.running:
                         self.preempt(self.running.pop())
                     else:
                         running_seqs.append(seq)
                         break
-                    condition = self.block_manager.can_append(
-                        seq, self.strict_max_blocks
-                    )
                 else:
                     running_seqs.append(seq)
-                    if condition == 1:
+                    if not_blocking:
                         self.block_manager.may_append(seq)
                         decoding_and_compressing_seqs.append(seq)
             self.running.extend(reversed(rejoining_seqs))
         self.running.extendleft(reversed(running_seqs))
         return decoding_and_compressing_seqs, False
 
-    def can_allocate_seq_id(self, seq: Sequence) -> bool:
+    def can_decode_without_seq_id(self, seq: Sequence) -> bool:
+        if seq.num_blocks < self.block_manager.max_blocks_per_seq:
+            return True
+        else:
+            return seq.last_block_num_tokens <= self.block_size - self.query_cache_len
+
+    def can_allocate_seq_id(self, seq: Sequence, is_prefill: bool) -> bool:
         return len(self.free_seq_ids) > 0 and (
             len(seq.block_table) < self.block_manager.max_blocks_per_seq
             or seq.last_block_num_tokens <= self.block_size - self.query_cache_len + 1
@@ -142,9 +147,7 @@ class Scheduler:
                 self.block_manager.deallocate_block_to_release(seq)
                 seq.block_table = seq.new_block_table
                 seq.new_block_table = []
-                seq.num_cached_tokens = (
-                    len(seq.block_table) - 1
-                ) * self.block_size + 1
+                seq.num_cached_tokens = (len(seq.block_table) - 1) * self.block_size + 1
                 seq.compressed = True
                 seq.require_compress = False
             if token_ids is not None:
