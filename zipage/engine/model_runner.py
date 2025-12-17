@@ -117,6 +117,8 @@ class ModelRunner:
         if not self.enforce_eager:
             del self.graphs, self.graph_pool
         torch.cuda.synchronize()
+        self.compress_stream.synchronize()
+        self.run_stream.synchronize()
         dist.destroy_process_group()
 
     def run_loop(self):
@@ -431,18 +433,15 @@ class ModelRunner:
         compressed = []
         target_block_tables = []
         for seq in seqs:
-            assert seq.seq_id != -1
             seq_ids.append(seq.seq_id)
             max_len_block_table = max(max_len_block_table, len(seq.block_table))
             # < 0 and !=-1 means the last block
             block_tables.append(seq.block_table[:-1] + [-seq.block_table[-1] - 2])
-            for block_id in seq.block_table:
-                assert block_id >= 0
             compressed.append(seq.compressed)
             target_block_tables.append(seq.new_block_table)
-            assert len(seq.new_block_table) == self.max_blocks_per_seq
-            for block_id in seq.new_block_table:
-                assert block_id >= 0
+            if len(seq.new_block_table) != self.max_blocks_per_seq:
+                print(f"new_block_table: {seq.new_block_table}, block_table: {seq.block_table}")
+                return
 
         times = []
 
@@ -463,6 +462,7 @@ class ModelRunner:
             block_tables = torch.tensor(
                 block_tables, dtype=torch.int32, pin_memory=True
             ).cuda(non_blocking=True)
+            # self.compress_stream.synchronize()
 
             for layer_id in range(0, len(self.model.model.layers), self.layer_stride):
                 k_cache = self.kv_cache[0, layer_id : layer_id + self.layer_stride]
@@ -621,17 +621,14 @@ class ModelRunner:
                     )
                     ed.record(self.compress_stream)
                     times.append((name, st, ed))
-        
-        times[-1][2].synchronize()
-        
-        avg_time=defaultdict(list)
+        self.compress_stream.synchronize()
+        avg_time = defaultdict(list)
         for name, st, ed in times:
-            # elapsed_time expects (start, end) and returns milliseconds.
-            t = st.elapsed_time(ed)/1000
+            t = st.elapsed_time(ed) / 1000
             avg_time[name].append(t)
-            self.time_record[name+'_sum'] += t
+            self.time_record[name + "_sum"] += t
         for name in avg_time:
-            self.time_record[name] = sum(avg_time[name])/len(avg_time[name])
+            self.time_record[name] = sum(avg_time[name]) / len(avg_time[name])
         return seqs
 
     def prepare_decode(self, seqs: list[Sequence]):

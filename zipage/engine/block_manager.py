@@ -117,7 +117,7 @@ class BlockManager:
                 block = Block(block_id)
                 block.update(h, token_ids)
                 self._add_block(block)
-
+            assert block_id >= 0
             seq.block_table.append(block_id)
 
     def deallocate_blocks(self, block_ids: list[int]):
@@ -140,10 +140,7 @@ class BlockManager:
     def may_compress(self, seq: Sequence) -> bool:
         if seq.compressed:
             seq.new_block_table = seq.block_table[: self.max_blocks_per_seq]
-            if len(seq.block_table) > self.max_blocks_per_seq:
-                seq.block_to_release = seq.block_table[self.max_blocks_per_seq :]
-            else:
-                seq.block_to_release.clear()
+            seq.block_to_release = seq.block_table[self.max_blocks_per_seq :]
             seq.require_compress = True
         else:
             # preserve share prefix
@@ -156,13 +153,12 @@ class BlockManager:
                     non_prefix_start += 1
                 else:
                     break
-            non_prefix_blocks = len(seq.block_table) - non_prefix_start
-            assert non_prefix_blocks >= 1
+            assert len(seq.block_table) - non_prefix_start >= 1
             num_new_blocks = min(non_prefix_start, self.max_blocks_per_seq - 1)
             if num_new_blocks > len(self.free_block_ids):
                 return False
             # new block table after compression
-            seq.new_block_table=[]
+            seq.new_block_table = []
             for _ in range(num_new_blocks):
                 block_id = self._allocate_block()
                 seq.new_block_table.append(block_id)
@@ -171,6 +167,7 @@ class BlockManager:
                 + self.max_blocks_per_seq
                 - num_new_blocks
             ]
+            assert len(seq.new_block_table) == self.max_blocks_per_seq
             # block to release after compression
             seq.block_to_release = seq.block_table[:non_prefix_start]
             seq.block_to_release += seq.block_table[
@@ -210,9 +207,10 @@ class BlockManager:
         return 1
 
     def may_append(self, seq: Sequence):
+        if seq.require_compress:
+            return
         if len(seq) % self.block_size == 1 and (
             seq.num_cached_tokens > self.block_size * len(seq.block_table)
         ):
-            if not seq.require_compress:
-                block_id = self._allocate_block()
-                seq.block_table.append(block_id)
+            block_id = self._allocate_block()
+            seq.block_table.append(block_id)

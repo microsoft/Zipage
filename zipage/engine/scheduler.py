@@ -83,7 +83,7 @@ class Scheduler:
             rejoining_seqs = []
             if seq.seq_id != -1:
                 while not self.block_manager.can_append_or_compress(
-                    seq, not self.enable_hybrid_engine or self.strict_max_blocks
+                    seq, (not self.enable_hybrid_engine) or self.strict_max_blocks
                 ):
                     if self.running and self.enable_hybrid_engine:
                         last_seq = self.running.pop()
@@ -126,6 +126,7 @@ class Scheduler:
         )
 
     def preempt(self, seq: Sequence):
+        assert seq.compressed == False and seq.require_compress == False
         seq.status = SequenceStatus.WAITING
         self._deallocate_seq_id(seq)
         self.block_manager.deallocate(seq)
