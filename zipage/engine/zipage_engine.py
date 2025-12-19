@@ -199,12 +199,11 @@ class LLMEngine:
         )
         self.logger["time"].append(time_from_start)
 
-        for key in self.time_record:
-            if not key.endswith("_sum"):
-                if (not key in self.logger) or (
-                    self.logger[key][-1] != self.time_record[key]
-                ):
-                    self.logger[key].append(self.time_record[key])
+        for key in ['decode', 'compress']:
+            if (not key in self.logger) or (
+                self.logger[key][-1] != self.time_record[key]
+            ):
+                self.logger[key].append(self.time_record[key])
 
         for key in self.model_runner.time_record:
             if not key.endswith("_sum"):

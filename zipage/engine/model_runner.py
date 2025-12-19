@@ -85,7 +85,10 @@ class ModelRunner:
         self.compress_stream = torch.cuda.Stream()
         self.run_stream = torch.cuda.Stream()
         self.warmup_model()
-        self.allocate_kv_cache()
+        self.allocate_kv_cache(
+            self.query_cache_len,
+            self.max_blocks_per_seq,
+        )
         if not self.enforce_eager:
             self.capture_cudagraph()
         torch.set_default_device("cpu")
@@ -117,8 +120,6 @@ class ModelRunner:
         if not self.enforce_eager:
             del self.graphs, self.graph_pool
         torch.cuda.synchronize()
-        self.compress_stream.synchronize()
-        self.run_stream.synchronize()
         dist.destroy_process_group()
 
     def run_loop(self):
@@ -281,7 +282,6 @@ class ModelRunner:
             hf_config.head_dim,
         )
 
-        assert config.num_kvcache_blocks > 0
         self.kv_cache = torch.empty(
             2,
             hf_config.num_hidden_layers,

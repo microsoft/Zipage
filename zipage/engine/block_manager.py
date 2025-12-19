@@ -159,7 +159,6 @@ class BlockManager:
             num_new_blocks = min(non_prefix_start, self.max_blocks_per_seq - 1)
             if num_new_blocks > len(self.free_block_ids):
                 return False
-            # new block table after compression
             seq.new_block_table = []
             for _ in range(num_new_blocks):
                 block_id = self._allocate_block()
@@ -170,7 +169,6 @@ class BlockManager:
                 - num_new_blocks
             ]
             assert len(seq.new_block_table) == self.max_blocks_per_seq
-            # block to release after compression
             seq.block_to_release = seq.block_table[:non_prefix_start]
             seq.block_to_release += seq.block_table[
                 non_prefix_start + self.max_blocks_per_seq - num_new_blocks :
