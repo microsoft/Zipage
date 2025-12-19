@@ -5,6 +5,7 @@ from zipage.engine.sequence import Sequence, SequenceStatus
 from zipage.engine.block_manager import BlockManager
 from typing import Optional
 import threading
+import time
 
 
 class Scheduler:
@@ -156,6 +157,7 @@ class Scheduler:
                 if (
                     not seq.ignore_eos and token_id == self.eos
                 ) or seq.num_completion_tokens == seq.max_tokens:
+                    seq.time_finished=time.time()
                     seq.status = SequenceStatus.FINISHED
                     self.block_manager.deallocate(seq)
                     self.running.remove(seq)

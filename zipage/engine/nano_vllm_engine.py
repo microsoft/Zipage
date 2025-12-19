@@ -64,7 +64,7 @@ class LLMEngine:
             self.time_record["decode"] = end_time - start_time
             self.time_record["decode_sum"] += end_time - start_time
         outputs = [
-            (seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished
+            (seq.seq_id, seq.completion_token_ids,seq.time_finished-seq.time_prefilled) for seq in seqs if seq.is_finished
         ]
         num_tokens = sum(len(seq) for seq in seqs) if is_prefill else -len(seqs)
         return outputs, num_tokens
@@ -140,14 +140,14 @@ class LLMEngine:
                 len(self.scheduler.waiting),
                 decode_throughput,
             )
-            for seq_id, token_ids in output:
-                outputs[seq_id] = token_ids
+            for seq_id, token_ids, gen_time in output:
+                outputs[seq_id] = (token_ids,gen_time)
                 if use_tqdm:
                     pbar.update(1)
         outputs = [outputs[seq_id] for seq_id in sorted(outputs.keys())]
         outputs = [
-            {"text": self.tokenizer.decode(token_ids), "token_ids": token_ids}
-            for token_ids in outputs
+            {"text": self.tokenizer.decode(token_ids), "token_ids": token_ids, "gen_time": gen_time}
+            for token_ids, gen_time in outputs
         ]
         if use_tqdm:
             pbar.close()

@@ -9,7 +9,7 @@ A high-concurrency offline LLM inference engine specifically optimized for long-
 
 ## Key Features
 
-* **High Concurrency** - It builds on PagedAttention and supports KV cache compression. The memory required for each request remains **constant**, thereby sustaining high concurrency.
+* **High Concurrency** - This project builds on PagedAttention and supports KV cache compression. The memory required for each request remains **constant**, thereby sustaining high concurrency.
 * **Optimization Suite** - Asynchronous decoding and compression, Prefix caching, Tensor Parallelism, etc.
 
 ## TODO

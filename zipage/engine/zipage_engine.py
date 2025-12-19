@@ -122,7 +122,11 @@ class LLMEngine:
             self.time_record["decode"] = end_time - start_time
             self.time_record["decode_sum"] += end_time - start_time
         outputs = [
-            (seq.request_id, seq.completion_token_ids)
+            (
+                seq.request_id,
+                seq.completion_token_ids,
+                seq.time_finished - seq.time_prefilled,
+            )
             for seq in seqs
             if seq.is_finished
         ]
@@ -167,7 +171,11 @@ class LLMEngine:
             self.time_record["decode_sum"] += end_time - start_time
 
         outputs = [
-            (seq.request_id, seq.completion_token_ids)
+            (
+                seq.request_id,
+                seq.completion_token_ids,
+                seq.time_finished - seq.time_prefilled,
+            )
             for seq in run_seqs
             if seq.is_finished
         ]
@@ -199,7 +207,7 @@ class LLMEngine:
         )
         self.logger["time"].append(time_from_start)
 
-        for key in ['decode', 'compress']:
+        for key in ["decode", "compress"]:
             if (not key in self.logger) or (
                 self.logger[key][-1] != self.time_record[key]
             ):
@@ -264,14 +272,18 @@ class LLMEngine:
                 len(self.scheduler.waiting),
                 decode_throughput,
             )
-            for request_id, token_ids in output:
-                outputs[request_id] = token_ids
+            for request_id, token_ids, gen_time in output:
+                outputs[request_id] = (token_ids, gen_time)
                 if use_tqdm:
                     pbar.update(1)
         outputs = [outputs[request_id] for request_id in sorted(outputs.keys())]
         outputs = [
-            {"text": self.tokenizer.decode(token_ids), "token_ids": token_ids}
-            for token_ids in outputs
+            {
+                "text": self.tokenizer.decode(token_ids),
+                "token_ids": token_ids,
+                "gen_time": gen_time,
+            }
+            for token_ids, gen_time in outputs
         ]
         if use_tqdm:
             pbar.close()

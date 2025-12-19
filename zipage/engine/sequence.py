@@ -3,7 +3,7 @@ from enum import Enum, auto
 from itertools import count
 from typing import List, Optional
 from zipage.sampling_params import SamplingParams
-
+import time
 
 class SequenceStatus(Enum):
     WAITING = auto()
@@ -30,6 +30,8 @@ class Sequence:
         self.require_compress = False
         self.compressed = False
         self.prefilled = False
+        self.time_prefilled=0
+        self.time_finished=0
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
@@ -88,6 +90,8 @@ class Sequence:
         self.num_tokens += 1
         self.num_cached_tokens += 1
         self.prefilled = True
+        if self.num_completion_tokens==1:
+            self.time_prefilled=time.time()
 
     def __getstate__(self):
         return (
