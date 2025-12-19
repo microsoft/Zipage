@@ -29,3 +29,6 @@ A high-concurrency offline LLM inference engine specifically optimized for long-
 ## Benchmark
 
 
+## Acknowledgments
+
+We extend our gratitude to the developers of [nano-vllm](https://github.com/GeeeekExplorer/nano-vllm), upon which our project is built.
