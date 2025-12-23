@@ -24,7 +24,36 @@ A high-concurrency offline LLM inference engine specifically optimized for long-
 
 ## Quick Start
 
+```python
+from transformers import AutoTokenizer
+from zipage import ZipLLM as LLM, SamplingParams
 
+
+path = './model/qwen3_8b'
+llm = LLM(
+    path,
+    enforce_eager=True,
+    gpu_memory_utilization=0.9,
+    max_cache_blocks_per_seq=8,
+    query_cache_len=16,
+    layer_stride=8,
+    enable_async_compress=True,
+    enable_hybrid_engine=True,
+    enable_prefix_cache=True,
+    decay_factor=0.8,
+    use_global_score=True,
+    use_similarity=True,
+    lightning_similarity=True,
+    similarity_lambda=0.2,
+    similarity_temperature=0.4,
+    max_num_batched_tokens=32768,
+    enable_pooling=True
+)
+sampling_params = SamplingParams(temperature=0.6, max_tokens=2048)
+prompts=['hello, zipage.']
+outputs = llm.generate(prompts, sampling_params)
+print(outputs['text'])
+```
 
 ## Benchmark
 
