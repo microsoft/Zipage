@@ -99,6 +99,8 @@ class BlockManager:
                 if (len(token_ids) == self.block_size and self.enable_prefix_cache)
                 else -1
             )
+            if i == seq.num_blocks - 1 and seq.num_blocks >= self.max_blocks_per_seq:
+                h = -1
             block = self._find_block_add_ref(h)
             if block is None:
                 cache_miss = True
