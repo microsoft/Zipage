@@ -73,11 +73,12 @@ class Scheduler:
             if len(self.free_seq_ids) > 0:
                 self._allocate_seq_id(seq)
             self.block_manager.allocate(seq)
-            num_batched_tokens += len(seq) - seq.num_cached_tokens
             seq.status = SequenceStatus.RUNNING
             self.waiting.popleft()
             self.running.append(seq)
-            prefilling_seqs.append(seq)
+            if not seq.num_cached_tokens == len(seq):
+                num_batched_tokens += len(seq) - seq.num_cached_tokens
+                prefilling_seqs.append(seq)
         if prefilling_seqs:
             return prefilling_seqs, True
 
