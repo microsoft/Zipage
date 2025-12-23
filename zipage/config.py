@@ -55,5 +55,3 @@ class Config:
         assert self.max_num_batched_tokens >= self.max_model_len
         assert self.max_cache_blocks_per_seq >= 1
         assert self.pooling_size % 2 == 1
-        if self.enable_prefix_cache:
-            assert self.enable_hybrid_engine, "shared prefix must combine with hybrid engine"

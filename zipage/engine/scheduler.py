@@ -19,6 +19,7 @@ class Scheduler:
             config.max_cache_blocks_per_seq + 1,
             config.enable_prefix_cache,
         )
+        self.enable_prefix_cache = config.enable_prefix_cache
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
         self.free_seq_ids: deque[int] = deque(range(config.max_concurrency))
@@ -88,14 +89,16 @@ class Scheduler:
             rejoining_seqs = []
             if seq.seq_id != -1:
                 while not self.block_manager.can_append_or_compress(seq):
-                    if self.running and self.enable_hybrid_engine:
+                    if self.running and (
+                        self.running[-1].seq_id == -1 or self.enable_prefix_cache
+                    ):
                         last_seq = self.running.pop()
                         if not (last_seq.compressed or last_seq.require_compress):
                             self.preempt(last_seq)
                         else:
                             rejoining_seqs.append(last_seq)
                     else:
-                        # suspend
+                        # suspend with out preemption
                         running_seqs.append(seq)
                         break
                 else:
@@ -103,7 +106,7 @@ class Scheduler:
                     running_seqs.append(seq)
                     decoding_and_compressing_seqs.append(seq)
             else:
-                not_blocking =  self.can_decode_without_seq_id(seq)
+                not_blocking = self.can_decode_without_seq_id(seq)
                 while not_blocking and not self.block_manager.can_append(seq):
                     if self.running:
                         self.preempt(self.running.pop())
@@ -157,7 +160,7 @@ class Scheduler:
                 if (
                     not seq.ignore_eos and token_id == self.eos
                 ) or seq.num_completion_tokens == seq.max_tokens:
-                    seq.time_finished=time.time()
+                    seq.time_finished = time.time()
                     seq.status = SequenceStatus.FINISHED
                     self.block_manager.deallocate(seq)
                     self.running.remove(seq)
