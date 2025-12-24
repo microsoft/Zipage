@@ -12,7 +12,7 @@ np.set_printoptions(precision=8, suppress=True)
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from zipvllm.kernel.store_query_cache import store_query_cache
+from zipage.kernel.store_query_cache import store_query_cache
 
 
 def test():

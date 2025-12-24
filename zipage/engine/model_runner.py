@@ -19,8 +19,8 @@ from zipage.utils.loader import load_model
 from zipage.kernel.compress_kv import compress_kv
 from zipage.kernel.compress_score import compress_score
 from zipage.kernel.attention_score import attention_score
-from zipage.kernel.raw_similarity_score import raw_similarity_score
-from zipage.kernel.lightning_similarity_score import lightning_similarity_score
+from zipage.kernel.raw_redudancy_score import raw_redudancy_score
+from zipage.kernel.lightning_redudancy_score import lightning_redudancy_score
 from zipage.kernel.global_score import global_score
 from zipage.kernel.window_mask import window_mask
 from zipage.kernel.utils import topk_mask
@@ -56,10 +56,10 @@ class ModelRunner:
         self.decay_factor = config.decay_factor
         self.score_cache = None
 
-        self.use_similarity = config.use_similarity
-        self.lightning_similarity = config.lightning_similarity
-        self.similarity_lambda = config.similarity_lambda
-        self.similarity_temperature = config.similarity_temperature
+        self.use_redudancy = config.use_redudancy
+        self.lightning_redudancy = config.lightning_redudancy
+        self.redudancy_lambda = config.redudancy_lambda
+        self.redudancy_temperature = config.redudancy_temperature
 
         self.enable_pooling = config.enable_pooling
         self.continues_pooling = config.continues_pooling
@@ -324,7 +324,7 @@ class ModelRunner:
         seqlen_q: int = 0,
     ):
         query_slot_mapping = []
-        if seq.seq_id == -1:
+        if seq.query_id == -1:
             return query_slot_mapping
         if is_prefill:
             num_blocks = (seqlen_q + self.block_size - 1) // self.block_size
@@ -334,14 +334,14 @@ class ModelRunner:
             if last_block_num_tokens > self.block_size - self.query_cache_len:
                 start = num_blocks * self.block_size - self.query_cache_len
                 for idx, pos in enumerate(range(start, seqlen_q)):
-                    query_slot_mapping.append((cu_len + pos, seq.seq_id, idx))
+                    query_slot_mapping.append((cu_len + pos, seq.query_id, idx))
 
         else:
             if seq.last_block_num_tokens > self.block_size - self.query_cache_len:
                 query_slot_mapping.append(
                     (
                         cu_len,
-                        seq.seq_id,
+                        seq.query_id,
                         seq.last_block_num_tokens
                         - (self.block_size - self.query_cache_len)
                         - 1,
@@ -431,11 +431,11 @@ class ModelRunner:
         # prepare
         max_len_block_table = 0
         block_tables = []
-        seq_ids = []
+        query_ids = []
         compressed = []
         target_block_tables = []
         for seq in seqs:
-            seq_ids.append(seq.seq_id)
+            query_ids.append(seq.query_id)
             max_len_block_table = max(max_len_block_table, len(seq.block_table))
             # < 0 and !=-1 means the last block
             block_tables.append(seq.block_table[:-1] + [-seq.block_table[-1] - 2])
@@ -445,7 +445,7 @@ class ModelRunner:
         times = []
 
         with torch.cuda.stream(self.compress_stream):
-            seq_ids = torch.tensor(seq_ids, dtype=torch.int32, pin_memory=True).cuda(
+            query_ids = torch.tensor(query_ids, dtype=torch.int32, pin_memory=True).cuda(
                 non_blocking=True
             )
             compressed = torch.tensor(
@@ -470,7 +470,7 @@ class ModelRunner:
 
                 # attention score
                 st, ed, name = record("attention_score")
-                scores = attention_score(k_cache, query_cache, seq_ids, block_tables)
+                scores = attention_score(k_cache, query_cache, query_ids, block_tables)
                 ed.record(self.compress_stream)
                 times.append((name, st, ed))
 
@@ -533,31 +533,31 @@ class ModelRunner:
                     num_layers, bsz, num_kv_heads, num_blocks, block_size
                 )
 
-                # similarity score
-                if self.use_similarity:
-                    st, ed, name = record("similarity_score")
-                    if self.lightning_similarity:
-                        similarity = lightning_similarity_score(
+                # redudancy score
+                if self.use_redudancy:
+                    st, ed, name = record("redudancy_score")
+                    if self.lightning_redudancy:
+                        redudancy = lightning_redudancy_score(
                             k_cache,
                             block_tables,
-                            temperature=self.similarity_temperature,
+                            temperature=self.redudancy_temperature,
                         )
                     else:
-                        similarity = raw_similarity_score(
+                        redudancy = raw_redudancy_score(
                             k_cache,
                             block_tables,
-                            temperature=self.similarity_temperature,
+                            temperature=self.redudancy_temperature,
                         )
                     if self.use_global_score and self.max_norm:
-                        similarity = similarity.view(num_layers, bsz, num_kv_heads, -1)
-                        similarity = similarity.div_(
-                            similarity.max(dim=-1, keepdim=True).values
+                        redudancy = redudancy.view(num_layers, bsz, num_kv_heads, -1)
+                        redudancy = redudancy.div_(
+                            redudancy.max(dim=-1, keepdim=True).values
                         )
-                        similarity = similarity.reshape(
+                        redudancy = redudancy.reshape(
                             num_layers, bsz, num_kv_heads, num_blocks, block_size
                         )
-                    scores = scores * self.similarity_lambda - similarity * (
-                        1 - self.similarity_lambda
+                    scores = scores * self.redudancy_lambda - redudancy * (
+                        1 - self.redudancy_lambda
                     )
                     ed.record(self.compress_stream)
                     times.append((name, st, ed))

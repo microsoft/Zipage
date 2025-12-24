@@ -16,7 +16,7 @@ class Sequence:
     counter = count()
 
     def __init__(self, token_ids: list[int], sampling_params=SamplingParams()):
-        self.seq_id = -1
+        self.query_id = -1
         self.status = SequenceStatus.WAITING
         self.token_ids = copy(token_ids)
         self.request_id = next(Sequence.counter)
@@ -58,10 +58,6 @@ class Sequence:
     def completion_token_ids(self):
         return self.token_ids[self.num_prompt_tokens :]
 
-    # @property
-    # def num_cached_blocks(self):
-    #     return self.num_cached_tokens // self.block_size
-
     @property
     def num_blocks(self):
         return (self.num_tokens + self.block_size - 1) // self.block_size
@@ -102,7 +98,7 @@ class Sequence:
             self.prefilled,
             self.new_block_table,
             self.compressed,
-            self.seq_id,
+            self.query_id,
             self.last_token if self.prefilled else self.token_ids,
         )
 
@@ -115,7 +111,7 @@ class Sequence:
             self.prefilled,
             self.new_block_table,
             self.compressed,
-            self.seq_id,
+            self.query_id,
         ) = state[:-1]
         if self.prefilled:
             self.last_token = state[-1]

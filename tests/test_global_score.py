@@ -9,9 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from zipvllm.kernel.attention_score import attention_score, get_padded_headsize
-from zipvllm.kernel.global_score import global_score
-from zipvllm.kernel.compress_score import compress_score
+from zipage.kernel.attention_score import attention_score
+from zipage.kernel.global_score import global_score
 
 
 def load_score_cache(score_cache, block_table):

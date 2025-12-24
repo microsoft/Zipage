@@ -4,7 +4,6 @@ from zipage.config import Config
 from zipage.engine.sequence import Sequence, SequenceStatus
 from zipage.engine.block_manager import BlockManager
 from typing import Optional
-import threading
 import time
 
 
@@ -22,8 +21,8 @@ class Scheduler:
         self.enable_prefix_cache = config.enable_prefix_cache
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
-        self.free_seq_ids: deque[int] = deque(range(config.max_concurrency))
-        self.used_seq_ids: set[int] = set()
+        self.free_query_ids: deque[int] = deque(range(config.max_concurrency))
+        self.used_query_ids: set[int] = set()
         self.enable_hybrid_engine = config.enable_hybrid_engine
         self.query_cache_len = config.query_cache_len
         self.block_size = self.block_manager.block_size
@@ -34,44 +33,44 @@ class Scheduler:
     def add(self, seq: Sequence):
         self.waiting.append(seq)
 
-    def _allocate_seq_id(self, seq: Sequence):
-        seq_id = self.free_seq_ids.popleft()
-        self.used_seq_ids.add(seq_id)
-        seq.seq_id = seq_id
+    def _allocate_query_id(self, seq: Sequence):
+        query_id = self.free_query_ids.popleft()
+        self.used_query_ids.add(query_id)
+        seq.query_id = query_id
 
-    def _deallocate_seq_id(self, seq: Sequence):
-        if seq.seq_id != -1:
-            self.used_seq_ids.remove(seq.seq_id)
-            self.free_seq_ids.append(seq.seq_id)
-            seq.seq_id = -1
+    def _deallocate_query_id(self, seq: Sequence):
+        if seq.query_id != -1:
+            self.used_query_ids.remove(seq.query_id)
+            self.free_query_ids.append(seq.query_id)
+            seq.query_id = -1
 
     def schedule(self) -> tuple[list[Sequence], bool]:
+        # query slots allocation
+        if self.enable_hybrid_engine and self.running and self.running[-1].query_id == -1:
+            running_seqs = []
+            while self.running and len(self.free_query_ids) > 0:
+                seq = self.running.popleft()
+                running_seqs.append(seq)
+                if seq.query_id == -1:
+                    self._allocate_query_id(seq)
+            self.running.extendleft(reversed(running_seqs))
+        
         # prefill
         prefilling_seqs = []
         num_batched_tokens = 0
-
-        if self.enable_hybrid_engine and self.running and self.running[-1].seq_id == -1:
-            running_seqs = []
-            while self.running and len(self.free_seq_ids) > 0:
-                seq = self.running.popleft()
-                running_seqs.append(seq)
-                if seq.seq_id == -1:
-                    self._allocate_seq_id(seq)
-            self.running.extendleft(reversed(running_seqs))
-
         while self.waiting and len(prefilling_seqs) < self.max_num_seqs:
             seq = self.waiting[0]
             if num_batched_tokens + len(
                 seq
             ) > self.max_num_batched_tokens or not self.block_manager.can_allocate(seq):
                 break
-            if len(self.free_seq_ids) == 0:
+            if len(self.free_query_ids) == 0:
                 if not self.enable_hybrid_engine:
                     break
-                if not self.can_decode_without_seq_id(seq):
+                if not self.can_decode_without_query_id(seq):
                     break
-            if len(self.free_seq_ids) > 0:
-                self._allocate_seq_id(seq)
+            if len(self.free_query_ids) > 0:
+                self._allocate_query_id(seq)
             self.block_manager.allocate(seq)
             seq.status = SequenceStatus.RUNNING
             self.waiting.popleft()
@@ -88,10 +87,10 @@ class Scheduler:
         while self.running and len(decoding_and_compressing_seqs) < self.max_num_seqs:
             seq = self.running.popleft()
             rejoining_seqs = []
-            if seq.seq_id != -1:
+            if seq.query_id != -1:
                 while not self.block_manager.can_append_or_compress(seq):
                     if self.running and (
-                        self.running[-1].seq_id == -1 or self.enable_prefix_cache
+                        self.running[-1].query_id == -1 or self.enable_prefix_cache
                     ):
                         last_seq = self.running.pop()
                         if not (last_seq.compressed or last_seq.require_compress):
@@ -107,7 +106,7 @@ class Scheduler:
                     running_seqs.append(seq)
                     decoding_and_compressing_seqs.append(seq)
             else:
-                not_blocking = self.can_decode_without_seq_id(seq)
+                not_blocking = self.can_decode_without_query_id(seq)
                 while not_blocking and not self.block_manager.can_append(seq):
                     if self.running:
                         self.preempt(self.running.pop())
@@ -123,14 +122,14 @@ class Scheduler:
         self.running.extendleft(reversed(running_seqs))
         return decoding_and_compressing_seqs, False
 
-    def can_decode_without_seq_id(self, seq: Sequence) -> bool:
+    def can_decode_without_query_id(self, seq: Sequence) -> bool:
         if seq.num_blocks < self.block_manager.max_blocks_per_seq:
             return True
         else:
             return seq.last_block_num_tokens <= self.block_size - self.query_cache_len
 
-    def can_allocate_seq_id(self, seq: Sequence, is_prefill: bool) -> bool:
-        return len(self.free_seq_ids) > 0 and (
+    def can_allocate_query_id(self, seq: Sequence, is_prefill: bool) -> bool:
+        return len(self.free_query_ids) > 0 and (
             len(seq.block_table) < self.block_manager.max_blocks_per_seq
             or seq.last_block_num_tokens <= self.block_size - self.query_cache_len + 1
         )
@@ -138,7 +137,7 @@ class Scheduler:
     def preempt(self, seq: Sequence):
         assert seq.compressed == False and seq.require_compress == False
         seq.status = SequenceStatus.WAITING
-        self._deallocate_seq_id(seq)
+        self._deallocate_query_id(seq)
         self.block_manager.deallocate(seq)
         self.waiting.appendleft(seq)
 
@@ -165,4 +164,4 @@ class Scheduler:
                     seq.status = SequenceStatus.FINISHED
                     self.block_manager.deallocate(seq)
                     self.running.remove(seq)
-                    self._deallocate_seq_id(seq)
+                    self._deallocate_query_id(seq)

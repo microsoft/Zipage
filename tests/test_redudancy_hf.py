@@ -10,13 +10,13 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from zipvllm.kernel.utils import _strides
+from zipage.kernel.utils import _strides
 
 
 @triton.jit
-def similarity_score_kernel(
+def redudancy_score_kernel(
     key_states_ptr,
-    similarity_cos_ptr,
+    redudancy_ptr,
     key_norm_ptr,
     num_pad_ptr,
     zero_out_ptr,
@@ -69,15 +69,15 @@ def similarity_score_kernel(
         # (m,1)
         km_norm = tl.load(km_norm_ptr, boundary_check=(0,))
         km = km / (km_norm + 1e-6)
-        similarity_ptr = tl.make_block_ptr(
-            base=similarity_cos_ptr + batch_idx * stride_sb + head_idx * stride_sh,
+        redudancy_ptr = tl.make_block_ptr(
+            base=redudancy_ptr + batch_idx * stride_sb + head_idx * stride_sh,
             shape=(seq_len, 1),
             strides=(stride_sl, 1),
             offsets=(m_offset, 0),
             block_shape=(BLOCK_M, 1),
             order=(1, 0),
         )
-        s = tl.load(similarity_ptr, boundary_check=(0,))
+        s = tl.load(redudancy_ptr, boundary_check=(0,))
         raw_dtype = s.dtype
         s = s.to(tl.float32)
         for n_offset in range(num_pad, seq_len, BLOCK_N):
@@ -138,10 +138,10 @@ def similarity_score_kernel(
             # reduce cosine similarity
             similarity = tl.sum(similarity, axis=1, keep_dims=True)
             s = similarity + s
-        tl.store(similarity_ptr, s.to(raw_dtype), boundary_check=(0,))
+        tl.store(redudancy_ptr, s.to(raw_dtype), boundary_check=(0,))
 
 
-def cal_similarity(
+def cal_redudancy(
     key_states: torch.Tensor,
     attention_mask: torch.Tensor,
     threshold=0.1,
@@ -149,15 +149,15 @@ def cal_similarity(
     debug=False,
 ):
     """
-    calculate cosine similarity score between key states
+    calculate redudancy score between key states
     the last token with high similarity (similarity > threshold) will be masked out
-    the similarity score of the same key will also be masked out
+    the redudancy score of the same key will also be masked out
     Args:
         key_states: (batch_size, num_kv_heads, seq_len, head_dim)
         attention_mask: (batch_size,  seq_len)
         threshold: float
     Returns:
-        similarity_score: (batch_size, num_heads, seq_len)
+        redudancy_score: (batch_size, num_heads, seq_len)
     """
     BLOCK_M = 16
     BLOCK_N = 64
@@ -165,7 +165,7 @@ def cal_similarity(
     batch_size, num_heads, seq_len, head_dim = key_states.shape
 
     key_norm = key_states.norm(dim=-1)
-    similarity_cos = torch.zeros(
+    redudancy = torch.zeros(
         (batch_size, num_heads, seq_len),
         dtype=key_states.dtype,
         device=key_states.device,
@@ -180,14 +180,14 @@ def cal_similarity(
     num_pad = (attention_mask == 0).sum(dim=-1).to(torch.int32)
 
     grid = (batch_size * num_heads,)
-    similarity_score_kernel[grid](
+    redudancy_score_kernel[grid](
         key_states,
-        similarity_cos,
+        redudancy,
         key_norm,
         num_pad,
         zero_out,
         **_strides(key_states, "kb", "kh", "kl", "kd"),
-        **_strides(similarity_cos, "sb", "sh", "sl"),
+        **_strides(redudancy, "sb", "sh", "sl"),
         **_strides(key_norm, "nb", "nh", "nl"),
         **_strides(zero_out, "zb", "zh", "zl"),
         threshold=threshold,
@@ -200,16 +200,16 @@ def cal_similarity(
 
     seq_len = attention_mask.sum(dim=-1, keepdim=True).unsqueeze(-1)
     if debug:
-        logits = similarity_cos.clone()
-    similarity_cos.div_(seq_len * temperature)
+        logits = redudancy.clone()
+    redudancy.div_(seq_len * temperature)
 
-    similarity_cos = torch.softmax(
-        similarity_cos - similarity_cos.max(dim=-1, keepdim=True).values, dim=-1
+    redudancy = torch.softmax(
+        redudancy - redudancy.max(dim=-1, keepdim=True).values, dim=-1
     )
 
     if debug:
-        return logits, similarity_cos
-    return similarity_cos
+        return logits, redudancy
+    return redudancy
 
 
 def test():
@@ -224,11 +224,11 @@ def test():
         [[0] * 32 + [1] * (seq_len - 32), [1] * seq_len],
         device="cuda",
     )
-    similarity_score = cal_similarity(key_cache, attention_mask)
+    redudancy_score = cal_redudancy(key_cache, attention_mask)
     time_start = time.time()
-    cal_similarity(key_cache, attention_mask)
+    cal_redudancy(key_cache, attention_mask)
     time_end = time.time()
-    print(similarity_score)
+    print(redudancy_score)
     print(f"Triton time: {time_end - time_start}")
 
 

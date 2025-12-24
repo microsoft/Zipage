@@ -8,12 +8,12 @@ from pathlib import Path
 import time
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from zipvllm.kernel.utils import _strides
+from zipage.kernel.utils import _strides
 
-from zipvllm.kernel.lightning_similarity_score import lightning_similarity_score
+from zipage.kernel.lightning_redudancy_score import lightning_redudancy_score
 
 
-def cal_similarity_ref(key_cache, block_table, threshold=0.5, temperature=1.0):
+def cal_redudancy_ref(key_cache, block_table, threshold=0.5, temperature=1.0):
     num_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim = key_cache.shape
     batch_size, max_num_blocks_per_seq = block_table.shape
 
@@ -46,7 +46,7 @@ def cal_similarity_ref(key_cache, block_table, threshold=0.5, temperature=1.0):
     key_norm = torch.clamp(key_norm, min=1e-6)
     key_states = key_states / (key_norm)
 
-    similarity = torch.full(
+    redudancy = torch.full(
         (num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size),
         float("-inf"),
         device=key_cache.device,
@@ -79,16 +79,16 @@ def cal_similarity_ref(key_cache, block_table, threshold=0.5, temperature=1.0):
                     last_true_mask = row_indices == last_true_idx
                     s = torch.where(last_true_mask, 0.0, s)
                     s = s.sum(dim=-1)
-                    similarity[l, z, :, m] = s
-    logits = similarity.clone()
-    similarity = similarity.div_(temperature * block_size)
-    similarity = similarity.view(num_layers, batch_size, num_kv_heads, -1)
-    similarity = similarity - similarity.max(dim=-1, keepdim=True).values
-    similarity = similarity.softmax(dim=-1)
-    similarity = similarity.reshape(
+                    redudancy[l, z, :, m] = s
+    logits = redudancy.clone()
+    redudancy = redudancy.div_(temperature * block_size)
+    redudancy = redudancy.view(num_layers, batch_size, num_kv_heads, -1)
+    redudancy = redudancy - redudancy.max(dim=-1, keepdim=True).values
+    redudancy = redudancy.softmax(dim=-1)
+    redudancy = redudancy.reshape(
         num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
     )
-    return similarity, logits
+    return redudancy, logits
 
 
 def test():
@@ -114,15 +114,15 @@ def test():
         dtype=torch.int32,
     )
 
-    logits, similarity_score = lightning_similarity_score(
+    logits, redudancy_score = lightning_redudancy_score(
         key_cache, block_table, threshold, temperature, return_logits=True
     )
 
-    similarity_score_ref, logits_ref = cal_similarity_ref(
+    redudancy_score_ref, logits_ref = cal_redudancy_ref(
         key_cache, block_table, threshold, temperature
     )
     time_start = time.time()
-    logits, similarity_score = lightning_similarity_score(
+    logits, redudancy_score = lightning_redudancy_score(
         key_cache, block_table, threshold, temperature, return_logits=True
     )
     time_end = time.time()
@@ -138,7 +138,6 @@ def test():
     print("max diff:", diff.max().item())
     print("mean diff:", diff.mean().item())
     print(f"Triton time: {time_end - time_start}")
-    # print(similarity_score.min(), similarity_score.max())
 
 
 if __name__ == "__main__":

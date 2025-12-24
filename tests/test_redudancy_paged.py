@@ -8,13 +8,13 @@ from pathlib import Path
 import time
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from zipvllm.kernel.utils import _strides
+from zipage.kernel.utils import _strides
 
-from zipvllm.kernel.raw_similarity_score import raw_similarity_score
-from tests.test_similarity_hf import cal_similarity
+from zipage.kernel.raw_redudancy_score import raw_redudancy_score
+from tests.test_redudancy_hf import cal_redudancy
 
 
-def cal_similarity_ref(key_cache, block_table, threshold=0.5, temperature=1.0):
+def cal_redudancy_ref(key_cache, block_table, threshold=0.5, temperature=1.0):
     num_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim = key_cache.shape
     batch_size, max_num_blocks_per_seq = block_table.shape
 
@@ -64,7 +64,7 @@ def cal_similarity_ref(key_cache, block_table, threshold=0.5, temperature=1.0):
     last_gt_mask = threshold_mask & (idx.flip(-1) == 1)
     similarity = torch.where(last_gt_mask, 0.0, similarity)
     # (batch_size, num_kv_heads, seq_len)
-    similarity = similarity.sum(dim=-2)
+    redudancy = similarity.sum(dim=-2)
     seq_length = (block_table != -1).sum(dim=-1) * block_size
 
     # (batch_size, max_num_blocks_per_seq)
@@ -79,22 +79,22 @@ def cal_similarity_ref(key_cache, block_table, threshold=0.5, temperature=1.0):
         )
     )
     valid_mask = valid_mask.reshape(num_layers, batch_size, num_kv_heads, -1)
-    similarity.masked_fill_(
+    redudancy.masked_fill_(
         valid_mask,
         float("-inf"),
     )
-    logits = similarity.clone()
+    logits = redudancy.clone()
 
-    similarity = similarity.div_(temperature * seq_length.unsqueeze(-1).unsqueeze(-1))
-    similarity = similarity - similarity.max(dim=-1, keepdim=True).values
-    similarity = similarity.softmax(dim=-1)
-    similarity = similarity.reshape(
+    redudancy = redudancy.div_(temperature * seq_length.unsqueeze(-1).unsqueeze(-1))
+    redudancy = redudancy - redudancy.max(dim=-1, keepdim=True).values
+    redudancy = redudancy.softmax(dim=-1)
+    redudancy = redudancy.reshape(
         num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
     )
-    return similarity, logits
+    return redudancy, logits
 
 
-def cal_similarity_hf(key_cache, block_table, threshold=0.5, temperature=1.0):
+def cal_redudancy_hf(key_cache, block_table, threshold=0.5, temperature=1.0):
     num_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim = key_cache.shape
     batch_size, max_num_blocks_per_seq = block_table.shape
 
@@ -150,7 +150,7 @@ def cal_similarity_hf(key_cache, block_table, threshold=0.5, temperature=1.0):
         device=key_cache.device,
         dtype=key_cache.dtype,
     )
-    similarity_cos = torch.zeros(
+    redudancy = torch.zeros(
         num_layers,
         batch_size,
         num_kv_heads,
@@ -160,17 +160,17 @@ def cal_similarity_hf(key_cache, block_table, threshold=0.5, temperature=1.0):
         dtype=key_cache.dtype,
     )
     for l in range(num_layers):
-        logits_, similarity_cos_ = cal_similarity(
+        logits_, redudancy_ = cal_redudancy(
             key_states[l], attention_mask, threshold, temperature, debug=True
         )
         logits[l] = logits_.reshape(
             batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
         )
-        similarity_cos[l] = similarity_cos_.reshape(
+        redudancy[l] = redudancy_.reshape(
             batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
         )
     mapped_logits = logits.clone()
-    mapped_similarity_cos = similarity_cos.clone().reshape(
+    mapped_redudancy = redudancy.clone().reshape(
         num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
     )
     for l in range(num_layers):
@@ -182,16 +182,16 @@ def cal_similarity_hf(key_cache, block_table, threshold=0.5, temperature=1.0):
                 for m in range(max_num_blocks_per_seq):
                     if block_table[z, m] != -1:
                         mapped_logits[l, z, h, m, :] = logits[l, z, h, pos, :]
-                        mapped_similarity_cos[l, z, h, m, :] = similarity_cos[
+                        mapped_redudancy[l, z, h, m, :] = redudancy[
                             l, z, h, pos, :
                         ]
                         pos += 1
                     else:
                         mapped_logits[l, z, h, m, :] = 0
-                        mapped_similarity_cos[l, z, h, m, :] = 0
+                        mapped_redudancy[l, z, h, m, :] = 0
     mapped_logits = mapped_logits.view(num_layers, batch_size, num_kv_heads, -1)
 
-    return mapped_logits, mapped_similarity_cos
+    return mapped_logits, mapped_redudancy
 
 
 def test():
@@ -216,18 +216,18 @@ def test():
         device="cuda",
         dtype=torch.int32,
     )
-    logits_hf, similarity_score_hf = cal_similarity_hf(
+    logits_hf, redudancy_score_hf = cal_redudancy_hf(
         key_cache, block_table, threshold, temperature
     )
-    logits, similarity_score = raw_similarity_score(
+    logits, redudancy_score = raw_redudancy_score(
         key_cache, block_table, threshold, temperature, return_logits=True
     )
 
-    similarity_score_ref, logits_ref = cal_similarity_ref(
+    redudancy_score_ref, logits_ref = cal_redudancy_ref(
         key_cache, block_table, threshold, temperature
     )
     time_start = time.time()
-    logits, similarity_score = raw_similarity_score(
+    logits, redudancy_score = raw_redudancy_score(
         key_cache, block_table, threshold, temperature, return_logits=True
     )
     time_end = time.time()
@@ -244,7 +244,6 @@ def test():
     print("max diff:", diff.max().item())
     print("mean diff:", diff.mean().item())
     print(f"Triton time: {time_end - time_start}")
-    # print(similarity_score.min(), similarity_score.max())
 
     diff_hf = (logits_hf - logits).abs()
     print("sum diff_hf:", diff_hf.sum().item())

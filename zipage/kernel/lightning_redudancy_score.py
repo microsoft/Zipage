@@ -7,9 +7,9 @@ from zipage.kernel.key_norm import key_norm
 
 
 @triton.jit
-def lightning_similarity_score_kernel(
+def lightning_redudancy_score_kernel(
     key_cache_ptr,
-    similarity_cos_ptr,
+    redudancy_ptr,
     key_norm_ptr,
     zero_out_ptr,
     block_table_ptr,
@@ -155,7 +155,7 @@ def lightning_similarity_score_kernel(
                 similarity = tl.sum(similarity, axis=1, keep_dims=True)
                 s = similarity + s
             s_ptr = tl.make_block_ptr(
-                base=similarity_cos_ptr
+                base=redudancy_ptr
                 + batch_idx * stride_sz
                 + head_idx * stride_sh
                 + m_block_idx * stride_sb
@@ -169,7 +169,7 @@ def lightning_similarity_score_kernel(
             tl.store(s_ptr, s.to(raw_dtype), boundary_check=(0,))
 
 
-def lightning_similarity_score(
+def lightning_redudancy_score(
     key_cache: torch.Tensor,
     block_table: torch.Tensor,
     threshold: float = 0.5,
@@ -177,7 +177,7 @@ def lightning_similarity_score(
     return_logits: bool = False,
 ):
     """
-    Calculate cos similarity score between key cache.
+    Calculate redudancy score between key cache.
     Args:
         key_cache: (num_layers, num_kvcache_blocks, block_size, num_kv_heads, head_dim)
         block_table: (batch_size, max_num_blocks_per_seq)
@@ -185,7 +185,7 @@ def lightning_similarity_score(
         retain_ratio: float
         threshold: float
     Returns:
-        similarity_score: (batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
+        redudancy_score: (batch_size, num_kv_heads, max_num_blocks_per_seq, block_size)
     """
     BLOCK_M = 16
     BLOCK_N = 64
@@ -195,7 +195,7 @@ def lightning_similarity_score(
 
     norm = key_norm(key_cache, block_table)
 
-    similarity_cos = torch.full(
+    redudancy = torch.full(
         (
             num_layers,
             batch_size,
@@ -219,14 +219,14 @@ def lightning_similarity_score(
         num_layers,
     )
 
-    lightning_similarity_score_kernel[grid](
+    lightning_redudancy_score_kernel[grid](
         key_cache,
-        similarity_cos,
+        redudancy,
         norm,
         zero_out,
         block_table,
         **_strides(key_cache, "ky", "kb", "kl", "kh", "kd"),
-        **_strides(similarity_cos, "sy", "sz", "sh", "sb", "sl"),
+        **_strides(redudancy, "sy", "sz", "sh", "sb", "sl"),
         **_strides(norm, "ny", "nz", "nh", "nb", "nl"),
         **_strides(zero_out, "zy", "zz", "zh", "zb", "zl"),
         **_strides(block_table, "tz", "tb"),
@@ -243,22 +243,22 @@ def lightning_similarity_score(
     del zero_out
 
     if return_logits:
-        logits = similarity_cos.clone()
+        logits = redudancy.clone()
 
-    similarity_cos = similarity_cos.view(num_layers, batch_size, num_kv_heads, -1)
+    redudancy = redudancy.view(num_layers, batch_size, num_kv_heads, -1)
 
-    similarity_cos = similarity_cos.div_(temperature * block_size)
-    dtype = similarity_cos.dtype
-    similarity_cos = similarity_cos.float()
-    similarity_cos = similarity_cos - similarity_cos.max(dim=-1, keepdim=True).values
-    similarity_cos = similarity_cos.softmax(dim=-1)
-    similarity_cos = similarity_cos.to(dtype)
+    redudancy = redudancy.div_(temperature * block_size)
+    dtype = redudancy.dtype
+    redudancy = redudancy.float()
+    redudancy = redudancy - redudancy.max(dim=-1, keepdim=True).values
+    redudancy = redudancy.softmax(dim=-1)
+    redudancy = redudancy.to(dtype)
 
-    similarity_cos = similarity_cos.reshape(
+    redudancy = redudancy.reshape(
         num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
     )
 
     if return_logits:
-        return logits, similarity_cos
+        return logits, redudancy
 
-    return similarity_cos
+    return redudancy

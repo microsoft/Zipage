@@ -26,11 +26,11 @@ class Config:
     use_global_score: bool = False
     decay_factor: float = 0.8
     max_norm: bool = False
-    # similarity score config
-    use_similarity: bool = False
-    lightning_similarity: bool = False
-    similarity_lambda: float = 0.2
-    similarity_temperature: float = 0.4
+    # redudancy score config
+    use_redudancy: bool = False
+    lightning_redudancy: bool = False
+    redudancy_lambda: float = 0.2
+    redudancy_temperature: float = 0.4
     # pooling config
     enable_pooling: bool = False
     continues_pooling: bool = False

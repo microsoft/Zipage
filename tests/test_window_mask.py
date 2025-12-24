@@ -12,7 +12,7 @@ np.set_printoptions(precision=8, suppress=True)
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from zipvllm.kernel.window_mask import window_mask
+from zipage.kernel.window_mask import window_mask
 
 
 def test():

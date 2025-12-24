@@ -1,6 +1,6 @@
 import os
 
-# os.environ["TRITON_INTERPRET"] = "1"
+os.environ["TRITON_INTERPRET"] = "1"
 import torch
 import numpy as np
 import sys
@@ -13,7 +13,7 @@ np.set_printoptions(precision=8, suppress=True)
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from zipvllm.kernel.attention_score import attention_score
+from zipage.kernel.attention_score import attention_score
 
 
 @torch.no_grad()
@@ -366,20 +366,15 @@ def test():
     logits[logits == float("-inf")] = 0
     logits_ref[logits_ref == float("-inf")] = 0
     logits_hf[logits_hf == float("-inf")] = 0
-
+    
+    print('logits diff with ref:')
     diff = (logits - logits_ref).abs()
-    print("sum diff:", diff.sum())
-    print("max diff:", diff.max())
-    print("mean diff:", diff.mean())
-
+    print("sum diff with ref:", diff.sum())
+    print("max diff with ref:", diff.max())
+    print("mean diff with ref:", diff.mean())
+    
+    print('logits diff with hf:')
     diff_hf = (logits_hf - logits).abs()
-    print("sum diff_hf:", diff_hf.sum())
-    print("max diff_hf:", diff_hf.max())
-    print("mean diff_hf:", diff_hf.mean())
-
-    print("scores diff:")
-    scores_hf = scores_hf.reshape(num_layers, 2, num_kv_heads, 4, block_size)
-    diff_hf = (scores_hf - score).abs()
     print("sum diff_hf:", diff_hf.sum())
     print("max diff_hf:", diff_hf.max())
     print("mean diff_hf:", diff_hf.mean())

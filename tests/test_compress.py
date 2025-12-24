@@ -12,9 +12,9 @@ np.set_printoptions(precision=8, suppress=True)
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from zipvllm.kernel.compress_kv import compress_kv
-from zipvllm.kernel.compress_score import compress_score
-from zipvllm.kernel.utils import topk_mask
+from zipage.kernel.compress_kv import compress_kv
+from zipage.kernel.compress_score import compress_score
+from zipage.kernel.utils import topk_mask
 
 
 def test():
