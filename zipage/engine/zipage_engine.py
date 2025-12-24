@@ -21,6 +21,7 @@ class LLMEngine:
         config_fields = {field.name for field in fields(Config)}
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
         config = Config(model, **config_kwargs)
+        self.max_compress_blocks = config.max_compress_blocks
         self.ps = []
         self.events = []
         self.compress_events = []
@@ -139,9 +140,10 @@ class LLMEngine:
         seqs, is_prefill = self.scheduler.schedule()
         compress_seqs: list[Sequence] = []
         run_seqs: list[Sequence] = []
-
+        max_compress_blocks = 1
         for seq in seqs:
             if seq.require_compress:
+                max_compress_blocks = max(max_compress_blocks, len(seq.block_table))
                 compress_seqs.append(seq)
             else:
                 run_seqs.append(seq)
@@ -150,7 +152,8 @@ class LLMEngine:
 
         if compress_seqs and compress_task_completed:
             self.compress_task_event.set()
-            self.executor.submit(self._compress_task, compress_seqs)
+            compress_concurrency = max(self.max_compress_blocks//max_compress_blocks, 1)
+            self.compress_future = self.executor.submit(self._compress_task, compress_seqs[:compress_concurrency])
 
         start_time = perf_counter()
         self.run_future = (
@@ -161,8 +164,8 @@ class LLMEngine:
 
         if self.run_future is not None:
             self.run_future.result()
-
         end_time = perf_counter()
+
         if is_prefill:
             self.time_record["prefill"] = end_time - start_time
             self.time_record["prefill_sum"] += end_time - start_time

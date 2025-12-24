@@ -219,12 +219,8 @@ def attention_score(
     )
     if return_logits:
         logits = qk_buffer.clone()
-    dtype = qk_buffer.dtype
-    qk_buffer = qk_buffer.float()
-    score = torch.softmax(
-        qk_buffer - qk_buffer.max(dim=-1, keepdim=True).values, dim=-1
-    )
-    score = score.to(dtype)
+    qk_buffer = qk_buffer - qk_buffer.max(dim=-1, keepdim=True).values
+    score = torch.softmax(qk_buffer, dim=-1)
     del qk_buffer
     if IS_GQA:
         score = score.view(

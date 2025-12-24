@@ -20,8 +20,8 @@ setup(
     },
     python_requires=">=3.10",
     install_requires=[
-        "torch>=2.6.0",
-        "transformers>=4.51.3",
-        "triton>=3.2.0",
+        "torch",
+        "transformers",
+        "datasets",
     ]
 )

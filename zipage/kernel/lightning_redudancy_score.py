@@ -248,11 +248,8 @@ def lightning_redudancy_score(
     redudancy = redudancy.view(num_layers, batch_size, num_kv_heads, -1)
 
     redudancy = redudancy.div_(temperature * block_size)
-    dtype = redudancy.dtype
-    redudancy = redudancy.float()
     redudancy = redudancy - redudancy.max(dim=-1, keepdim=True).values
     redudancy = redudancy.softmax(dim=-1)
-    redudancy = redudancy.to(dtype)
 
     redudancy = redudancy.reshape(
         num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size

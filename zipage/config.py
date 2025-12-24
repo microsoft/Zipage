@@ -9,10 +9,11 @@ class Config:
     max_num_batched_tokens: int = 32768
     max_num_seqs: int = 512
     max_concurrency:int = -1
+    max_compress_blocks:int = 600
     max_model_len: int = 4096
     gpu_memory_utilization: float = 0.9
     tensor_parallel_size: int = 1
-    enforce_eager: bool = False
+    enforce_eager: bool = True
     hf_config: AutoConfig | None = None
     eos: int = -1
     pad: int = -1

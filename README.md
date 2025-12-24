@@ -5,7 +5,7 @@
 
 # Zipage
 
-A high-concurrency LLM inference engine.
+A high-concurrency LLM offline inference engine based on PagedAttention and KV cache compression.
 
 ## Key Features
 
@@ -13,15 +13,15 @@ A high-concurrency LLM inference engine.
 * **Optimization Suite** - Asynchronous decoding and compression, Prefix caching, Tensor Parallelism, etc.
 
 TODO
-
 - [ ] Online engine.
 - [ ] Support chunked prefilling.
 - [ ] Adaptive KV cache budget.
 - [ ] More sampling algorithms.
-- [ ] Support VLM.
+- [ ] Support more models, including VLM.
 
 ## Installation
 
+Prepare a Python environment: Python version >=3.10, including the following libraries: torch >= 2.3.0, triton >= 3.2.0, and flash-attn >= 2.7.4
 
 ```
 git clone https://xxx.git
@@ -33,17 +33,26 @@ pip install -e .
 
 ## Quick Start
 
+
+Download model
+
+```python
+from huggingface_hub import snapshot_download
+
+snapshot_download(repo_id="Qwen/Qwen3-8B", local_dir="./models/qwen3_8b")
+```
+
+Generation
+
 ```python
 from transformers import AutoTokenizer
 from zipage import ZipLLM as LLM, SamplingParams
 
 
-path = './model/qwen3_8b'
+path = './models/qwen3_8b'
 llm = LLM(
     path,
-    enforce_eager=True,
     gpu_memory_utilization=0.9,
-    max_num_batched_tokens=32768,
     max_cache_blocks_per_seq=8,
     enable_async_compress=True,
     enable_hybrid_engine=True,
@@ -56,24 +65,20 @@ llm = LLM(
 sampling_params = SamplingParams(temperature=0.6, max_tokens=2048)
 prompts=['hello, zipage.']
 outputs = llm.generate(prompts, sampling_params)
-print(outputs['text'])
+print(outputs[0]['text'])
 ```
 
 ## Benchmark
 
-Evaluate on a math benchmark
+Inference on a math benchmark
 
 ```shell
 bash scripts/mathbench.sh
 ```
 
-Evaluate on LongBench
+Inference on LongBench
 
 ```shell
 python examples/longbench_process.py
 bash scripts/longbench.sh
 ```
-
-<!-- ## Acknowledgments
-
-We extend our gratitude to the developers of [nano-vllm](https://github.com/GeeeekExplorer/nano-vllm), upon which our project is built. -->

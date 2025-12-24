@@ -265,11 +265,8 @@ def raw_redudancy_score(
     redudancy = redudancy.div_(
         temperature * seq_length.unsqueeze(-1).unsqueeze(-1)
     )
-    dtype = redudancy.dtype
-    redudancy = redudancy.float()
     redudancy = redudancy - redudancy.max(dim=-1, keepdim=True).values
     redudancy = redudancy.softmax(dim=-1)
-    redudancy = redudancy.to(dtype)
 
     redudancy = redudancy.reshape(
         num_layers, batch_size, num_kv_heads, max_num_blocks_per_seq, block_size
