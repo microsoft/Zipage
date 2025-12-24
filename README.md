@@ -5,7 +5,7 @@
 
 # Zipage
 
-A high-concurrency offline LLM inference engine specifically optimized for long-output reasoning tasks.
+A high-concurrency LLM inference engine.
 
 ## Key Features
 
@@ -16,9 +16,18 @@ TODO
 
 - [ ] Online engine.
 - [ ] Support chunked prefilling.
+- [ ] Adaptive KV cache budget.
+- [ ] More sampling algorithms.
+- [ ] Support VLM.
 
 ## Installation
 
+
+```
+git clone https://xxx.git
+cd zipage
+pip install -e .
+```
 
 
 
@@ -34,19 +43,14 @@ llm = LLM(
     path,
     enforce_eager=True,
     gpu_memory_utilization=0.9,
+    max_num_batched_tokens=32768,
     max_cache_blocks_per_seq=8,
-    query_cache_len=16,
-    layer_stride=8,
     enable_async_compress=True,
     enable_hybrid_engine=True,
     enable_prefix_cache=True,
-    decay_factor=0.8,
     use_global_score=True,
     use_similarity=True,
     lightning_similarity=True,
-    similarity_lambda=0.2,
-    similarity_temperature=0.4,
-    max_num_batched_tokens=32768,
     enable_pooling=True
 )
 sampling_params = SamplingParams(temperature=0.6, max_tokens=2048)
@@ -57,7 +61,19 @@ print(outputs['text'])
 
 ## Benchmark
 
+Evaluate on a math benchmark
 
-## Acknowledgments
+```shell
+bash scripts/mathbench.sh
+```
 
-We extend our gratitude to the developers of [nano-vllm](https://github.com/GeeeekExplorer/nano-vllm), upon which our project is built.
+Evaluate on LongBench
+
+```shell
+python examples/longbench_process.py
+bash scripts/longbench.sh
+```
+
+<!-- ## Acknowledgments
+
+We extend our gratitude to the developers of [nano-vllm](https://github.com/GeeeekExplorer/nano-vllm), upon which our project is built. -->

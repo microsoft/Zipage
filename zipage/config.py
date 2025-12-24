@@ -24,13 +24,13 @@ class Config:
     query_cache_len: int = 16
     # global score config
     use_global_score: bool = False
-    decay_factor: float = 0.6
+    decay_factor: float = 0.8
     max_norm: bool = False
     # similarity score config
     use_similarity: bool = False
     lightning_similarity: bool = False
-    similarity_lambda: float = 0.1
-    similarity_temperature: float = 1.0
+    similarity_lambda: float = 0.2
+    similarity_temperature: float = 0.4
     # pooling config
     enable_pooling: bool = False
     continues_pooling: bool = False
@@ -41,7 +41,7 @@ class Config:
     strict_max_blocks: bool = False
     enable_prefix_cache: bool = False
     # others
-    layer_stride: int = 1
+    layer_stride: int = 8
     use_attention_sink: bool = False
     sink_len: int = 4
     repetition_penalty: float = 1.0
