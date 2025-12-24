@@ -30,10 +30,10 @@ def main(args):
             enable_hybrid_engine=args.enable_hybrid_engine,
             strict_max_blocks=args.strict_max_blocks,
             enable_prefix_cache=args.enable_prefix_cache,
-            similarity_lambda=args.similarity_lambda,
-            use_similarity=args.use_similarity,
-            similarity_temperature=args.similarity_temperature,
-            lightning_similarity=args.lightning_similarity,
+            redudancy_lambda=args.redudancy_lambda,
+            use_redudancy=args.use_redudancy,
+            redudancy_temperature=args.redudancy_temperature,
+            lightning_redudancy=args.lightning_redudancy,
             gpu_memory_utilization=args.gpu_memory_utilization,
             max_num_batched_tokens=args.max_num_batched_tokens,
             enable_pooling=args.enable_pooling,
@@ -67,6 +67,8 @@ def main(args):
     for d, output in zip(data, outputs):
         d["output"] = output["text"]
         d["output_len"] = len(output["token_ids"])
+        if "gen_time" in output:
+            d["gen_time"] = output["gen_time"]
     if args.output_path:
         with open(args.output_path, "w") as f:
             info = {
@@ -119,10 +121,10 @@ if __name__ == "__main__":
     parser.add_argument("--strict_max_blocks", action="store_true")
     parser.add_argument("--use_attention_sink", action="store_true")
     parser.add_argument("--sink_len", type=int, default=4)
-    parser.add_argument("--similarity_lambda", type=float, default=0.4)
-    parser.add_argument("--lightning_similarity", action="store_true")
-    parser.add_argument("--similarity_temperature", type=float, default=1.0)
-    parser.add_argument("--use_similarity", action="store_true")
+    parser.add_argument("--redudancy_lambda", type=float, default=0.4)
+    parser.add_argument("--lightning_redudancy", action="store_true")
+    parser.add_argument("--redudancy_temperature", type=float, default=1.0)
+    parser.add_argument("--use_redudancy", action="store_true")
     parser.add_argument("--enable_prefix_cache", action="store_true")
     parser.add_argument("--enable_pooling", action="store_true")
     parser.add_argument("--continues_pooling", action="store_true")
