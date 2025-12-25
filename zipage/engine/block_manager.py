@@ -56,7 +56,7 @@ class BlockManager:
             len(self.used_block_ids) + len(self.free_block_ids)
         )
 
-    def _allocate_block(self, block_id: int)->Block:
+    def _allocate_block(self, block_id: int) -> Block:
         with self.block_lock:
             self.free_block_ids.remove(block_id)
             self.used_block_ids.add(block_id)
@@ -90,7 +90,7 @@ class BlockManager:
             if i == seq.num_blocks - 1 and seq.num_blocks >= self.max_blocks_per_seq:
                 h = -1
             block_id = self.hash_to_block_id.get(h, -1)
-            if block_id == -1 or  self.blocks[block_id].token_ids != token_ids:
+            if block_id == -1 or self.blocks[block_id].token_ids != token_ids:
                 cache_miss = True
             if cache_miss:
                 block_id = self.free_block_ids[0]
@@ -138,8 +138,6 @@ class BlockManager:
             num_new_blocks = min(non_prefix_start, self.max_blocks_per_seq - 1)
             if num_new_blocks > len(self.free_block_ids):
                 return False
-            for block_id in seq.block_table[non_prefix_start:]:
-                self.blocks[block_id].reset()
             seq.new_block_table = []
             for _ in range(num_new_blocks):
                 block_id = self.free_block_ids[0]
@@ -155,6 +153,13 @@ class BlockManager:
             seq.block_to_release += seq.block_table[
                 non_prefix_start + self.max_blocks_per_seq - num_new_blocks :
             ]
+            for block_id in seq.block_table[
+                non_prefix_start : non_prefix_start
+                + self.max_blocks_per_seq
+                - num_new_blocks
+            ]:
+                self.blocks[block_id].reset()
+
             seq.require_compress = True
         return True
 
@@ -189,9 +194,10 @@ class BlockManager:
             seq.block_table.append(block_id)
         elif len(seq) % self.block_size == 0:
             if not seq.compressed:
-                assert last_block.hash == -1
-                token_ids = seq.block(seq.num_blocks-1)
-                prefix = self.blocks[block_table[-2]].hash if len(block_table) > 1 else -1
+                token_ids = seq.block(seq.num_blocks - 1)
+                prefix = (
+                    self.blocks[block_table[-2]].hash if len(block_table) > 1 else -1
+                )
                 h = self.compute_hash(token_ids, prefix)
                 last_block.update(h, token_ids)
                 self.hash_to_block_id[h] = last_block.block_id
