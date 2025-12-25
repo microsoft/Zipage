@@ -87,10 +87,15 @@ class BlockManager:
                 if (len(token_ids) == self.block_size and self.enable_prefix_cache)
                 else -1
             )
-            if i == seq.num_blocks - 1 and seq.num_blocks >= self.max_blocks_per_seq:
-                h = -1
             block_id = self.hash_to_block_id.get(h, -1)
-            if block_id == -1 or self.blocks[block_id].token_ids != token_ids:
+            may_save_query = (
+                i == seq.num_blocks - 1 and seq.num_blocks >= self.max_blocks_per_seq
+            )
+            if (
+                block_id == -1
+                or self.blocks[block_id].token_ids != token_ids
+                or may_save_query
+            ):
                 cache_miss = True
             if cache_miss:
                 block_id = self.free_block_ids[0]
