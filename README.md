@@ -21,7 +21,19 @@ TODO
 
 ## Installation
 
-Prepare a Python environment: Python version >=3.10, including the following libraries: torch >= 2.3.0, triton >= 3.2.0, and flash-attn >= 2.7.4
+Environment
+
+```
+conda create --name zipage python=3.12
+conda activate zipage
+
+# CUDA 12.8
+pip install torch==2.9.0 torchvision==0.24.0 torchaudio==2.9.0 --index-url https://download.pytorch.org/whl/cu128
+
+pip install flash-attn --no-build-isolation
+```
+
+Install
 
 ```
 git clone https://xxx.git
@@ -70,7 +82,7 @@ print(outputs[0]['text'])
 
 ## Benchmark
 
-Inference on a math benchmark
+Inference on math benchmark (AMC 23, AIME 24, GSM8K)
 
 ```shell
 bash scripts/mathbench.sh

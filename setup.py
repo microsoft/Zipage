@@ -18,10 +18,15 @@ setup(
     package_data={
         "": ["*.so", "*.pyi", "*.typed"],
     },
-    python_requires=">=3.10",
+    python_requires=">=3.12",
     install_requires=[
-        "torch",
-        "transformers",
+        "triton",
+        "transformers>=4.51.1",
         "datasets",
+        "tqdm",
+        "flash-attn",
+        "torch>=2.6.0",
+        "torchvision",
+        "torchaudio",
     ]
 )
