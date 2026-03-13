@@ -23,7 +23,7 @@ TODO
 ## Experiment Overview
 
 <p align="center">
-<img width="300" src="assets/tps_cmp_exp.png">
+<img width="500" src="assets/tps_cmp_exp.png">
 </p>
 
 While achieving 95% of the performance of vLLM cache, Zipage more than doubled its TPS.
