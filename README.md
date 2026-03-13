@@ -26,7 +26,7 @@ TODO
 <img width="500" src="assets/tps_cmp_exp.png">
 </p>
 
-While achieving 95% of the performance of vLLM cache, Zipage more than doubled its TPS.
+While achieving over 95% of the performance of vLLM, Zipage more than doubled its TPS.
 
 
 
