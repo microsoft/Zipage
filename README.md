@@ -19,6 +19,17 @@ TODO
 - [ ] More sampling algorithms.
 - [ ] Support more models, including VLM.
 
+
+## Experiment Overview
+
+<p align="center">
+<img width="300" src="assets/tps_cmp_exp.png">
+</p>
+
+While achieving 95% of the performance of vLLM cache, Zipage more than doubled its TPS.
+
+
+
 ## Installation
 
 Environment
@@ -94,3 +105,24 @@ Inference on LongBench
 python examples/longbench_process.py
 bash scripts/longbench.sh
 ```
+## Citation
+
+If you use Zipage for your research, please cite our paper:
+
+```
+@misc{liao2026zipagemaintainhighrequest,
+      title={Zipage: Maintain High Request Concurrency for LLM Reasoning through Compressed PagedAttention}, 
+      author={Mengqi Liao and Lu Wang and Chaoyun Zhang and Bo Qiao and Si Qin and Qingwei Lin and Saravan Rajmohan and Dongmei Zhang and Huaiyu Wan},
+      year={2026},
+      eprint={2603.08743},
+      archivePrefix={arXiv},
+      primaryClass={cs.DC},
+      url={https://arxiv.org/abs/2603.08743}, 
+}
+```
+
+## Acknowledgements
+
+This project was developed with reference to [Nano-vLLM](https://github.com/GeeeekExplorer/nano-vllm). We appreciate the ideas and implementation patterns it provides, which helped inform parts of our design and engineering decisions.
+
+Thanks to the Nano-vLLM authors and contributors for open-sourcing and maintaining the project.
